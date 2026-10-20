@@ -111,7 +111,7 @@ class NlControlStack(Stack):
             user_name=f"{p}-app",
             authentication_mode={"Type": "iam"},
             # Only the key prefixes and commands the application uses.
-            access_string="on ~ctx:* ~state:* ~session:* ~confirm:* ~pending:* ~idem:* "
+            access_string="on ~ctx:* ~state:* ~session:* ~confirm:* ~pending:* ~idem:* ~prefs:* "
             "-@all +@connection +get +set +getdel +del +exists +ttl",
         )
         cache_group = elasticache.CfnUserGroup(
@@ -381,7 +381,7 @@ class NlControlStack(Stack):
                 "customOauth2ProviderConfig": {
                     "oauthDiscovery": {"discoveryUrl": discovery},
                     "clientId": m2m.user_pool_client_id,
-                    "clientSecretSource": "EXTERNAL",
+                    "clientSecretSource": "EXTERNAL",  # pragma: allowlist secret - enum value
                     "clientSecretConfig": {"secretId": m2m_secret.secret_arn, "jsonKey": "clientSecret"},
                 }
             },
@@ -579,6 +579,9 @@ class NlControlStack(Stack):
                     "bedrock-agentcore:ListMemoryRecords",
                     "bedrock-agentcore:BatchCreateMemoryRecords",
                     "bedrock-agentcore:BatchDeleteMemoryRecords",
+                    # Authorised separately when a record carries an expiry specification
+                    # (found by deployment testing; see DEPLOYMENT-LOG.md).
+                    "bedrock-agentcore:UpdateMemoryRecordExpirySpecification",
                 ],
                 resources=[memory.attr_memory_arn],
             )
@@ -658,7 +661,7 @@ class NlControlStack(Stack):
         for k, v in out.items():
             CfnOutput(self, f"Out{k}", key=k, value=v)
 
-        apply_suppressions(self)
+        apply_suppressions(self, base_model)
 
     # ---------------------------------------------------------------- helpers
 
@@ -854,7 +857,8 @@ class NlControlStack(Stack):
             ),
             cw.GraphWidget(
                 title="Segment latency p95 (do not add percentiles)",
-                left=[m(f"Latency{s}", "p95") for s in ("Preload", "Inference", "Dispatch")],
+                left=[m(f"Latency{s}", "p95") for s in ("Preload", "Inference", "Dispatch")]
+                + [m("AgentMemoryReadMs", "p95"), m("AgentModelMs", "p95")],
                 width=12,
             ),
             cw.GraphWidget(

@@ -17,11 +17,33 @@ import statistics
 import time
 import uuid
 
+import boto3
 import requests
-from common import ROOT, id_token, stack_name_from_config, stack_outputs
+from common import ROOT, id_token, region, stack_name_from_config, stack_outputs
 from demo import api, speaker_roundtrip
 
 RESULTS: list[dict] = []
+
+
+def preference_records(out: dict, username: str, device: str, attribute: str, wait: float = 15.0) -> list[dict]:
+    """Read long-term preference records directly from AgentCore Memory (listing is eventually consistent)."""
+    idp = boto3.client("cognito-idp", region_name=region())
+    attrs = idp.admin_get_user(UserPoolId=out["UserPoolId"], Username=username)["UserAttributes"]
+    sub = next(a["Value"] for a in attrs if a["Name"] == "sub")
+    mem = boto3.client("bedrock-agentcore", region_name=region())
+    flt = [
+        {"left": {"metadataKey": "deviceUuid"}, "operator": "EQUALS_TO", "right": {"metadataValue": {"stringValue": device}}},
+        {"left": {"metadataKey": "attribute"}, "operator": "EQUALS_TO", "right": {"metadataValue": {"stringValue": attribute}}},
+    ]
+    deadline, records = time.time() + wait, []
+    while True:
+        records = mem.list_memory_records(memoryId=out["MemoryId"], namespace=f"/members/{sub}/preferences/",
+                                          metadataFilters=flt, maxResults=20).get("memoryRecordSummaries", [])
+        if time.time() >= deadline or (
+            len(records) == 1 and records[0].get("metadata", {}).get("value", {}).get("stringValue") == "40"
+        ):
+            return records
+        time.sleep(1.0)
 
 
 def check(name: str, ok: bool, detail: str = "") -> bool:
@@ -113,12 +135,25 @@ def main() -> int:
     _, rec, _ = api(out, bob, "GET", f"/v1/commands/{acts[0]['command_id']}" if acts else "/v1/commands/x")
     check("receipts are per user", rec.get("error") == "command not found", json.dumps(rec, ensure_ascii=False))
 
-    # Explicit preference is stored, then used.
+    # Explicit preferences: written to AgentCore Memory, one record per device and attribute (overwrite).
     api(out, alice, "POST", "/v1/commands", {"utterance": "把主卧灯亮度调到30"})
-    time.sleep(2.0)
+    api(out, alice, "POST", "/v1/commands", {"utterance": "把主卧灯亮度调到40"})
+    records = preference_records(out, "demo-alice", "dev-master-light", "brightness", wait=0)
+    newest = max(records, key=lambda r: str(r.get("createdAt", ""))) if records else {}
+    check("effective preference is the latest stated value",
+          newest.get("metadata", {}).get("value", {}).get("stringValue") == "40",
+          json.dumps([r.get("metadata", {}).get("value") for r in records], ensure_ascii=False))
+    # Listing is eventually consistent; a later write removes superseded records it can see.
+    time.sleep(10)
+    api(out, alice, "POST", "/v1/commands", {"utterance": "把主卧灯亮度调到40"})
+    records = preference_records(out, "demo-alice", "dev-master-light", "brightness")
+    check("superseded preference records are removed by a later write",
+          [r["metadata"]["value"]["stringValue"] for r in records] == ["40"],
+          json.dumps([r.get("metadata", {}).get("value") for r in records], ensure_ascii=False))
+    api(out, alice, "POST", "/v1/commands", {"utterance": "关掉主卧灯"})
     status, body, _ = api(out, alice, "POST", "/v1/commands", {"utterance": "打开主卧灯，按我平常的亮度"})
-    check("preference influences a later request",
-          any(x.get("params", {}).get("brightness") == 30 for x in body.get("actions", [])),
+    check("later request uses the remembered brightness",
+          any(x.get("params", {}).get("brightness") == 40 for x in body.get("actions", [])),
           json.dumps(body, ensure_ascii=False)[:300])
 
     # Status query uses the gateway tool only when a live re-check is requested.

@@ -39,9 +39,6 @@ STACK_WIDE: dict[str, str] = {
     f"{P}IAM5[Resource::arn:<AWS::Partition>:bedrock-agentcore:<AWS::Region>:<AWS::AccountId>:workload-identity-directory/default/workload-identity/*]":
         "Workload identities are created by AgentCore for the runtime and gateway; their names are not known "
         "at synth time. Scoped to the account's default directory.",
-    f"{P}IAM5[Resource::arn:<AWS::Partition>:bedrock:*::foundation-model/amazon.nova-lite-v1:0]":
-        "Cross-region inference profiles route to the same model in several regions; the wildcard is the region "
-        "segment of one specific model ARN.",
     f"{P}IAM5[Resource::arn:<AWS::Partition>:logs:<AWS::Region>:<AWS::AccountId>:log-group:/aws/bedrock-agentcore/runtimes/*]":
         "AgentCore Runtime log groups are named by the service after the runtime id; scoped to the runtime prefix.",
     f"{P}IAM5[Resource::<Runtime.AgentRuntimeArn>/runtime-endpoint/*]":
@@ -62,9 +59,16 @@ PLATFORM_API_REASON = (
 )
 
 
-def apply_suppressions(stack: Stack) -> None:
+def apply_suppressions(stack: Stack, base_model: str) -> None:
     for rule, reason in STACK_WIDE.items():
         Validations.of(stack).acknowledge(Acknowledgment(id=rule, reason=reason))
+    Validations.of(stack).acknowledge(
+        Acknowledgment(
+            id=f"{P}IAM5[Resource::arn:<AWS::Partition>:bedrock:*::foundation-model/{base_model}]",
+            reason="Cross-region inference profiles route to the same model in several regions; the wildcard is "
+            "the region segment of the one configured model ARN.",
+        )
+    )
     platform_api = stack.node.find_child("PlatformApi")
     for rule in ("APIG4", "COG4"):
         Validations.of(platform_api).acknowledge(Acknowledgment(id=f"{P}{rule}", reason=PLATFORM_API_REASON))
