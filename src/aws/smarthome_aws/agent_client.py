@@ -37,6 +37,7 @@ class RuntimeAgentClient:
                     "utterance": request.utterance,
                     "channel": request.channel,
                     "devices": request.devices,
+                    "preferences": request.preferences,
                 },
                 ensure_ascii=False,
             ).encode(),
@@ -44,8 +45,11 @@ class RuntimeAgentClient:
         body = resp["response"].read()
         out = json.loads(body)
         usage = out.get("usage") or {}
-        for k in ("inputTokens", "outputTokens"):
+        for k in ("inputTokens", "outputTokens", "cacheReadInputTokens"):
             if k in usage:
                 self.metrics.put(f"Model{k[0].upper()}{k[1:]}", usage[k], "Count")
         self.metrics.put("AgentToolCalls", out.get("tool_calls", 0), "Count")
+        for k, v in (out.get("timings_ms") or {}).items():
+            # Segments measured inside the runtime; the rest of LatencyInference is invocation overhead.
+            self.metrics.put("AgentMemoryReadMs" if k == "memory_read" else "AgentModelMs", v)
         return json.dumps(out["plan"], ensure_ascii=False)
