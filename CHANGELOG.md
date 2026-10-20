@@ -15,3 +15,5 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
   with a default-deny Cedar policy engine; AgentCore Identity (OAuth2 M2M); runtime resource policy.
 - Synthetic evaluation set (mock and real-model modes), unit, adapter and config tests, end-to-end script,
   preflight and leftover-check scripts; cdk-nag clean synth.
+- Agent deployed as an AgentCore Runtime direct code deployment (ARM64 wheels built with uv); no Docker needed.
+  The container image (`src/agent/Dockerfile`) remains as an optional path.

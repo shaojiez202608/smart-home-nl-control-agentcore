@@ -1,15 +1,46 @@
 # Verification
 
-What was actually run, with results. Run date: 2026-10-20. Latency and cost numbers are deliberately not
-written here; the raw measurements are produced by the scripts into the git-ignored `.build/` directory.
+What was actually run, with results. Two rounds, both on 2026-10-20 (UTC). Latency and cost numbers are
+deliberately not written here; the raw measurements are produced by the scripts into the git-ignored `.build/`
+directory.
 
-## Environment
+## Round 2 - current code (commits `c750355` and `f55efdd`)
+Changes since round 1: agent as a direct code deployment (no Docker), default-deny Cedar policy engine on the
+gateway, runtime resource policy, explicit runtime lifecycle, per-call AWS clients in the agent, repository
+conventions (see CHANGELOG.md and DECISIONS.md D19-D26).
+
+| Check | Command | Result |
+|---|---|---|
+| Lint and format | `uv run ruff check .`, `uv run ruff format --check .` | Passed |
+| Unit, adapter, config and evaluator tests | `uv run pytest` | **60 passed, 0 failed** |
+| Evaluation set, mock model | `uv run python scripts/run_eval.py` | **22/22 passed** |
+| CDK synth with cdk-nag, sandbox and handover configs | `npx aws-cdk@latest synth -c config=config/<name>.json` | Passed, no unacknowledged findings |
+| Secret scan | `detect-secrets scan` (excluding `.venv`, build output) | **0 findings** |
+| Repository hygiene | grep for 12-digit account ids and customer names | Only the documentation placeholder `111122223333`, package hashes in `uv.lock` and an RFC example UUID in sample data |
+| Preflight | `uv run python scripts/preflight.py` | Passed (Docker not required) |
+| Deploy | `npx aws-cdk@latest deploy -c config=config/sandbox.json`, Region **us-west-2**, model `us.amazon.nova-lite-v1:0` | `CREATE_COMPLETE`, 164 resources; agent package built with uv, no container runtime used |
+| End-to-end | `uv run python scripts/seed_demo.py && uv run python scripts/e2e_test.py --latency-samples 30` | **24/25 checks passed** (table below) |
+
+New end-to-end checks in round 2, all passed: the gateway permits the read-only status tool; the gateway
+denies the device-control tool (Cedar default deny); the runtime rejects callers other than the orchestrator.
+All round-1 functional checks passed again. **Failed:** server-side acceptance latency P95 within the
+configured target, as in round 1 (analysis below).
+
+The first round-2 run reported one more failure, "effective preference is the latest stated value": the test
+read Memory once, immediately after the write, and the freshly created memory had not indexed the record yet.
+The test now polls (as the other preference checks already did); the re-run passed. No application change.
+
+Round-2 deployment history, including a failed attempt with the container path: DEPLOYMENT-LOG.md.
+
+## Round 1 - container image deployment
+
+### Environment
 * macOS (arm64), Python 3.12 (local tests), Lambda runtime Python 3.14 (arm64), agent container Python 3.13
   (linux/arm64), Node.js 24, AWS CDK CLI 2.1146.0, aws-cdk-lib 2.273.0, cdk-nag 3.0.2.
 * Agent dependencies deployed and tested: strands-agents 1.61.1, bedrock-agentcore 1.24.2,
   aws-opentelemetry-distro 0.21.0, boto3 1.43.115, pydantic 2.14.1 (pinned in `src/agent/requirements.txt`).
 
-## Local checks
+### Local checks
 
 | Check | Command | Result |
 |---|---|---|
@@ -20,10 +51,10 @@ written here; the raw measurements are produced by the scripts into the git-igno
 | Evaluation set, real model Amazon Nova Micro | same, with `MODEL_ID=us.amazon.nova-micro-v1:0` | 14/15 locally (same `scene-sleep` failure); see the deployed result below |
 | CDK synth with cdk-nag (AwsSolutions), sandbox config | `npx aws-cdk@latest synth -c config=config/sandbox.json` | Passed, no unacknowledged findings |
 | CDK synth with cdk-nag, handover config | `npx aws-cdk@latest synth -c config=config/handover.json --output <tmp dir>` | Passed, no unacknowledged findings |
-| Secret scan | `detect-secrets scan` over the repository (excluding `.venv`, caches) | **0 findings** after marking one false positive (`api_key_secret_source="EXTERNAL"`, an enum value) with an allowlist comment |
+| Secret scan | `detect-secrets scan` over the repository (excluding `.venv`, caches) | **0 findings** after marking one false positive (an enum value in `stack.py`) with an allowlist comment |
 | Repository hygiene | grep for 12-digit account ids and customer names | No account ids (only package hashes in `uv.lock`); no customer, brand or person names |
 
-## Deployment verification (AWS, sandbox account)
+### Deployment verification (AWS, sandbox account)
 
 Region: **us-west-2**. The first attempt in us-east-1 failed because the account's VPC and internet-gateway
 quotas in that Region were exhausted by existing resources; the stack was rolled back and deleted (see
@@ -47,7 +78,7 @@ Final run on the final code, default model (Amazon Nova Lite): **21/22 checks pa
 | Voice channel over AWS IoT Core: reply received; unlock held; no token on the voice channel; held action listed in the app | Pass |
 | **Server-side acceptance latency P95 within the configured target** (`acceptanceLatencyTargetMs`) | **Fail** - P95 above the configured target in this prototype configuration. See analysis below. |
 
-### Latency analysis (method and findings, no numbers)
+#### Latency analysis (method and findings, no numbers)
 Measured with `scripts/e2e_test.py` (independent end-to-end measurement of 30 control requests) and the
 orchestrator's EMF segment metrics.
 * Preload (cache hit) and parallel dispatch are a small share of the total.
@@ -65,7 +96,7 @@ orchestrator's EMF segment metrics.
 * Remaining levers are listed in docs/handover.md (load testing with production-like device counts, model
   choice, provisioned or priority service tiers where the chosen model supports them, output-size budgets).
 
-### Defects found only by deployment testing (all fixed and re-verified)
+#### Defects found only by deployment testing (all fixed and re-verified)
 1. `BatchCreateMemoryRecords.recordExpirySpecification` is a tagged union (only one key allowed); a unit test
    with botocore's Stubber now validates the request against the service model.
 2. Writing a record with an expiry needs `bedrock-agentcore:UpdateMemoryRecordExpirySpecification` in addition
@@ -80,7 +111,9 @@ orchestrator's EMF segment metrics.
    e2e check).
 7. The cdk-nag acknowledgement for the model ARN was hard-coded to one model; it now follows `modelId`.
 
-## Not run
+## Not run (both rounds)
+* **Real-model evaluation set in round 2**: not re-run in-process; the prompts and validation are unchanged
+  since round 1, and the deployed real-model path was covered by the end-to-end checks.
 * **ASH (Automated Security Helper)** scan: not run. The tool was not available in the build
   environment, and installing ASH from source was not attempted within this session's network constraints.
   Run it before publishing.

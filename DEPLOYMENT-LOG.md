@@ -1,7 +1,7 @@
 # Deployment log
 
 Account: disposable sandbox account (id not recorded). Credentials from the shell environment. All resources
-carried the tags `Project=proto-nl`, `Purpose=prototype`, `Teardown=after-test`. Times are UTC, 2026-10-20.
+carried the tags `Project=proto-nl`, `Purpose=prototype`, `Teardown=after-test`. Times are UTC, 2026-10-20. Round 1 (container image) first, round 2 (current code) at the end.
 
 ## Attempt 1 - us-east-1 (failed, cleaned up)
 | Time | Event |
@@ -67,6 +67,30 @@ Deleting the 30 project object versions was **blocked by the local tool permissi
 session, so they were not deleted. Shared CDK provider assets are intentionally kept: they are
 content-addressed and may be referenced by other stacks.
 
+Round-1 conclusion: 30 project object versions left in the two bootstrap buckets (superseded by the final
+conclusion below).
+
+## Round 2 - us-west-2 (current code)
+| Time | Event |
+|---|---|
+| 15:4x | Deploy of the reviewed code with the container path. The local container CLI switched to a desktop runtime that requires sign-in, and the image tag step failed; file assets and the template were published, no CloudFormation changes. Retried against the local runtime socket. |
+| 16:2x-16:36 | Stack creation; AgentCore Runtime, runtime resource policy, gateway policy engine and Cedar policy created. |
+| 16:34-17:07 | The ElastiCache Serverless cache went to `create-failed` with no event message; the same definition had created successfully in round 1 and did again in the next attempt (treated as transient). CloudFormation kept waiting on the resource. |
+| 17:07-17:20 | Deploy process stopped; `aws cloudformation delete-stack` on this stack; deleted, failed cache gone. |
+| 17:0x-17:20 | Agent switched to direct code deployment so that deploying needs no Docker or other container runtime (DECISIONS.md D26); runtime S3 read scoped to the one package object; lint, tests, eval and both synths re-run. Commit `c750355`. |
+| 17:21-17:28 | Preflight passed (no Docker check any more); deploy, 164 resources, `CREATE_COMPLETE`. Runtime created from the zip package. |
+| 17:32-17:36 | Seed; e2e 23/25, then 24/25 after fixing a test that read Memory once before indexing (commit `f55efdd`). See VERIFICATION.md. |
+| 17:37-17:47 | `npx aws-cdk@latest destroy -c config=config/sandbox.json --force`; stack deleted. |
+| 17:4x | Leftover check in us-west-2 and us-east-1 with `scripts/verify_cleanup.py`: 6 service-created log groups (2 AgentCore Runtime, 4 CDK provider Lambdas, from both round-2 stacks) deleted by name; 1 stale tag-index entry (subnet) verified not found, and the script now re-checks subnets and VPCs. Re-run: no leftovers. |
+| 17:5x | Agent image from the container attempt deleted from the bootstrap ECR repository (1 tag; repository now has no images). |
+
+Round-2 bootstrap S3 objects (us-west-2), classified by content as in round 1: 3 templates, 4 Lambda zips,
+2 layer zips, 1 agent package (10 versions). us-east-1: none from this project (new objects there belong to
+another application and were not touched). Deletion was not attempted again because it was blocked by the local
+tool permission settings in round 1.
+
 ## Conclusion
-**仍有残留 / Leftovers remain:** 30 object versions of this project's CDK assets in the two CDK bootstrap S3
-buckets (us-west-2: 22, us-east-1: 8). No other resource of this project remains in either Region.
+**仍有残留 / Leftovers remain:** 40 object versions of this project's CDK assets in the two CDK bootstrap S3
+buckets (us-west-2: 32, us-east-1: 8); they are listed by key and version id for the
+maintainer to delete. No other resource of this project remains in either Region: no stack, AgentCore resources,
+cache, IAM roles, log groups, tagged resources or ECR images.

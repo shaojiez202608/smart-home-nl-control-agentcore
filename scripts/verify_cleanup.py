@@ -38,6 +38,10 @@ def still_exists(r: str, arn: str) -> bool:
             return st["NatGateways"][0]["State"] not in ("deleted", "deleting")
         elif svc == "ec2" and rid.startswith("vpc-endpoint/"):
             boto3.client("ec2", region_name=r).describe_vpc_endpoints(VpcEndpointIds=[rid.split("/")[-1]])
+        elif svc == "ec2" and rid.startswith("subnet/"):
+            boto3.client("ec2", region_name=r).describe_subnets(SubnetIds=[rid.split("/")[-1]])
+        elif svc == "ec2" and rid.startswith("vpc/"):
+            boto3.client("ec2", region_name=r).describe_vpcs(VpcIds=[rid.split("/")[-1]])
         elif svc == "ec2" and rid.startswith("vpc-flow-log/"):
             fl = boto3.client("ec2", region_name=r).describe_flow_logs(FlowLogIds=[rid.split("/")[-1]])
             return bool(fl["FlowLogs"])
