@@ -25,9 +25,15 @@ class IamTokenProvider(CredentialProvider):
         self.user_id = user_id
         self.cache_name = cache_name
         self.region = region
-        session = boto3.session.Session()
+        # Keep the session alive: the signer only holds a weak reference to its event emitter.
+        self._session = boto3.session.Session()
         self._signer = RequestSigner(
-            ServiceId("elasticache"), region, "elasticache", "v4", session.get_credentials(), session.events
+            ServiceId("elasticache"),
+            region,
+            "elasticache",
+            "v4",
+            self._session.get_credentials(),
+            self._session.events,
         )
         self._token = ""
         self._expires = 0.0
