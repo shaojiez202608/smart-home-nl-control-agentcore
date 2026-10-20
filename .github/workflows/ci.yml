@@ -1,0 +1,25 @@
+name: ci
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: uv sync --all-groups
+      - run: uv run ruff check .
+      - run: uv run pytest
+      - run: uv run python scripts/run_eval.py
+      # Synth with cdk-nag; no AWS credentials are needed for synth.
+      - run: npx --yes aws-cdk@latest synth -c config=config/sandbox.json --quiet
+        env:
+          CDK_DEFAULT_ACCOUNT: "111122223333"
+          CDK_DEFAULT_REGION: us-east-1

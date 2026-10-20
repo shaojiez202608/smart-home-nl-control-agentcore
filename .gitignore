@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+
+# Build and CDK output
+.build/
+cdk.out/
+cdk.context.json
+
+# Local demo state (generated credentials, tokens) - never commit
+.demo/
+*.env
+.env*
+
+# OS / editors
+.DS_Store
+.idea/
+.vscode/
+
+# Archives (also keeps security scanners from flagging packaged deps)
+*.zip
+*.tar.gz
