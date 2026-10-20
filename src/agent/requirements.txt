@@ -1,5 +1,6 @@
+# Versions deployed and tested on AgentCore Runtime (see VERIFICATION.md).
 strands-agents==1.61.1
 bedrock-agentcore==1.24.2
-aws-opentelemetry-distro>=0.12
-boto3>=1.43.115
-pydantic>=2.8,<3
+aws-opentelemetry-distro==0.21.0
+boto3==1.43.115
+pydantic==2.14.1

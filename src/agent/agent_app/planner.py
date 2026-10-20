@@ -17,7 +17,7 @@ from typing import Any
 from strands import Agent, tool
 from strands.models import BedrockModel
 
-from .prompts import SYSTEM_PROMPT, build_prompt
+from .prompts import build_prompt, build_system
 from .schema import PlanModel
 
 log = logging.getLogger(__name__)
@@ -67,7 +67,7 @@ def run_plan(
     whitelist = {d["uuid"] for d in devices}
     agent = Agent(
         model=model or _model(),
-        system_prompt=SYSTEM_PROMPT,
+        system_prompt=build_system(devices),
         tools=[make_status_tool(whitelist, status_lookup)],
         callback_handler=None,
     )
@@ -78,7 +78,10 @@ def run_plan(
     tool_calls = sum(m.call_count for m in result.metrics.tool_metrics.values())
     return {
         "plan": plan.model_dump(),
-        "usage": {k: usage.get(k, 0) for k in ("inputTokens", "outputTokens", "totalTokens")},
+        "usage": {
+            k: usage.get(k, 0)
+            for k in ("inputTokens", "outputTokens", "totalTokens", "cacheReadInputTokens", "cacheWriteInputTokens")
+        },
         "tool_calls": tool_calls,
         "cycles": result.metrics.cycle_count,
     }

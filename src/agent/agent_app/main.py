@@ -16,6 +16,8 @@ import json
 import logging
 import os
 import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from typing import Any
 
@@ -38,6 +40,11 @@ OAUTH_SCOPE = os.environ.get("OAUTH_SCOPE", "")
 HISTORY_TURNS = int(os.environ.get("HISTORY_TURNS", "6"))
 
 app = BedrockAgentCoreApp()
+
+# Each runtime session runs in its own microVM, so an in-process cache keyed by
+# session id holds this session's recent turns. Memory stays the durable copy
+# and is read only when the session's microVM is new.
+_HISTORY: dict[str, list[dict[str, str]]] = {}
 memory = boto3.client("bedrock-agentcore", region_name=REGION)
 
 
@@ -50,9 +57,15 @@ def read_preferences(user_id: str) -> list[str]:
         return []
     try:
         resp = memory.list_memory_records(
-            memoryId=MEMORY_ID, namespace=preferences_namespace(user_id), maxResults=50
+            memoryId=MEMORY_ID, namespace=preferences_namespace(user_id), maxResults=100
         )
-        return [r["content"]["text"] for r in resp.get("memoryRecordSummaries", [])]
+        newest: dict[tuple[str, str], dict] = {}
+        for r in resp.get("memoryRecordSummaries", []):
+            md = r.get("metadata") or {}
+            key = tuple((md.get(k) or {}).get("stringValue", "") for k in ("deviceUuid", "attribute"))
+            if key not in newest or str(r.get("createdAt", "")) > str(newest[key].get("createdAt", "")):
+                newest[key] = r
+        return [r["content"]["text"] for r in newest.values()]
     except Exception:
         log.exception("read_preferences_failed")
         return []
@@ -83,12 +96,15 @@ def read_history(user_id: str, session_id: str) -> list[dict[str, str]]:
 
 def write_turn(user_id: str, session_id: str, utterance: str, plan: dict[str, Any]) -> None:
     """Short-term memory of the conversation (for follow-ups like "再暗一点")."""
-    if not MEMORY_ID:
-        return
     summary = json.dumps(
         {"type": plan["type"], "actions": [[a["uuid"], a["action"], a["params"]] for a in plan["actions"]]},
         ensure_ascii=False,
     )
+    turns = _HISTORY.setdefault(session_id, [])
+    turns += [{"role": "user", "text": utterance[:300]}, {"role": "assistant", "text": summary[:300]}]
+    del turns[: -HISTORY_TURNS * 2]
+    if not MEMORY_ID:
+        return
     try:
         memory.create_event(
             memoryId=MEMORY_ID,
@@ -131,14 +147,30 @@ def invoke(payload: dict[str, Any], context: Any = None) -> dict[str, Any]:
     user_id = str(payload["user_id"])
     session_id = str(payload.get("session_id") or getattr(context, "session_id", "") or "default-session")
     utterance = str(payload.get("utterance", ""))[:500]
+    t0 = time.perf_counter()
+    # Preferences normally arrive preloaded by the orchestrator; history comes
+    # from this session's microVM. Memory is read only for what is missing.
+    preloaded = payload.get("preferences")
+    cached_history = _HISTORY.get(session_id)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        prefs_f = None if preloaded is not None else pool.submit(read_preferences, user_id)
+        hist_f = None if cached_history is not None else pool.submit(read_history, user_id, session_id)
+        preferences = list(preloaded) if preloaded is not None else prefs_f.result()
+        history = list(cached_history) if cached_history is not None else hist_f.result()
+    _HISTORY.setdefault(session_id, list(history))
+    t1 = time.perf_counter()
     out = run_plan(
         utterance=utterance,
         devices=list(payload.get("devices") or []),
-        preferences=read_preferences(user_id),
-        history=read_history(user_id, session_id),
+        preferences=preferences,
+        history=history,
         channel=str(payload.get("channel", "app")),
         status_lookup=gateway_status_lookup(user_id),
     )
+    out["timings_ms"] = {
+        "memory_read": round((t1 - t0) * 1000, 1),
+        "model": round((time.perf_counter() - t1) * 1000, 1),
+    }
     # Persist the turn off the critical path.
     threading.Thread(
         target=write_turn, args=(user_id, session_id, utterance, out["plan"]), daemon=True
