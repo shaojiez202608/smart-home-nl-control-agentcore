@@ -35,3 +35,10 @@ aws bedrock-agentcore-control list-api-key-credential-providers
 aws bedrock-agentcore-control list-oauth2-credential-providers
 aws elasticache describe-serverless-caches --serverless-cache-name ${P}-cache  # expect: not found
 ```
+
+## CDK assets in the shared bootstrap bucket
+The bootstrap bucket and container repository are shared by all CDK apps in the account. Remove only this
+project's assets: images whose tag equals an asset hash you built (`docker image ls | grep cdkasset-`), and
+object versions whose content is this project's (template description, Lambda handler source, or a layer zip
+containing `python/smarthome_core/`). Keep the generic CDK provider assets (`index.js`, `__entrypoint__.js`),
+which other stacks may reference. The bucket is versioned, so delete by version id.

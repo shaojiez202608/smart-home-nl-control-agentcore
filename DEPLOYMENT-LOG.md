@@ -51,3 +51,22 @@ Gateway target, API-key and OAuth2 credential providers; 10 IAM roles / 11 polic
 | KMS keys | none created (AWS owned / AWS managed keys only) |
 | ECR images in the CDK bootstrap repositories (agent image, 5 tags in us-west-2, 1 in us-east-1) | deleted; matched one-to-one against the locally built asset hashes |
 | S3 objects in the CDK bootstrap buckets | see below |
+
+### S3 objects in the CDK bootstrap buckets
+The bootstrap buckets are shared by every CDK app in the account (another application also deployed to
+us-east-1 the same day). Each object version uploaded on the test day was classified by **content**:
+templates by their stack description, Lambda zips by their handler source, layer zips by reading the zip
+central directory for `python/smarthome_core/`.
+
+| Region | Project templates | Project Lambda zips | Project layer zips | Shared CDK provider zips (kept) | Other applications (kept) |
+|---|---|---|---|---|---|
+| us-west-2 | 10 | 4 | 8 | 2 | 0 |
+| us-east-1 | 2 | 4 | 2 | 3 | 17 |
+
+Deleting the 30 project object versions was **blocked by the local tool permission settings** in this
+session, so they were not deleted. Shared CDK provider assets are intentionally kept: they are
+content-addressed and may be referenced by other stacks.
+
+## Conclusion
+**仍有残留 / Leftovers remain:** 30 object versions of this project's CDK assets in the two CDK bootstrap S3
+buckets (us-west-2: 22, us-east-1: 8). No other resource of this project remains in either Region.
