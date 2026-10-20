@@ -193,3 +193,35 @@ def test_non_control_replies_pass_through_trimmed(ptype):
     orch, platform, _, _ = make([{"type": ptype, "message": "x" * 1000}])
     r = orch.handle(USER, "客厅灯开着吗")
     assert r.type == ptype and len(r.message) == 300 and platform.dispatched == []
+
+
+def test_written_preference_is_preloaded_into_the_next_request():
+    set30 = {"type": "control", "actions": [
+        {"uuid": "dev-master-light", "action": "setBrightness", "params": {"brightness": 30}}]}
+    orch, _, prefs, _ = make([{"type": "chat", "message": "hi"}, set30, {"type": "chat", "message": "ok"}])
+    orch.handle(USER, "你好")  # caches the (empty) preference list
+    orch.handle(USER, "把主卧灯调到30")  # writes a preference and invalidates the cache
+    orch.handle(USER, "打开主卧灯")
+    assert orch.agent.requests[0].preferences == []
+    assert orch.agent.requests[2].preferences == [r.text for r in prefs.for_user(USER)] != []
+
+
+def test_rejections_and_raw_output_reach_the_log_text(caplog):
+    orch, *_ = make(["not json at all", {"type": "control", "actions": [{"uuid": "ghost", "action": "turnOff"}]}])
+    with caplog.at_level("WARNING"):
+        orch.handle(USER, "a")
+        orch.handle(USER, "b")
+    text = "\n".join(r.getMessage() for r in caplog.records)
+    assert "not json at all" in text and "uuid_not_in_whitelist" in text
+
+
+def test_agent_failure_returns_fallback_instead_of_raising():
+    class Boom:
+        def plan(self, request):
+            raise TimeoutError("runtime unavailable")
+
+    platform = FakePlatform()
+    orch = Orchestrator(cache=MemoryCache(), directory=platform, agent=Boom(), dispatcher=platform,
+                        preferences=FakePreferenceStore())
+    r = orch.handle(USER, "我要睡觉了")
+    assert r.type == "error" and r.message == FALLBACK_REPLY and platform.dispatched == []

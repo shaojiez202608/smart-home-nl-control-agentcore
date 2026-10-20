@@ -86,6 +86,9 @@ class FakePreferenceStore:
         for r in records:
             self.records[(user_id, r.device_uuid, r.attribute)] = r  # overwrite, not append
 
+    def list_texts(self, user_id: str) -> list[str]:
+        return [r.text for r in self.for_user(user_id)]
+
     def for_user(self, user_id: str) -> list[PreferenceRecord]:
         return [r for (u, _, _), r in self.records.items() if u == user_id]
 

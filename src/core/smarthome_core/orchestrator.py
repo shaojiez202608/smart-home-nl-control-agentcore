@@ -18,6 +18,7 @@ physical execution on the device) shapes the design:
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import secrets
 import time
@@ -60,6 +61,13 @@ def devices_key(user_id: str) -> str:
 
 def state_key(uuid: str) -> str:
     return f"state:{uuid}"
+
+
+def prefs_key(user_id: str) -> str:
+    return f"prefs:{user_id}"
+
+
+PREFS_CACHE_TTL = 3600
 
 
 @dataclass
@@ -121,6 +129,7 @@ class Orchestrator:
         # 1. Preload device context (cache first, platform API on miss).
         t = time.perf_counter()
         whitelist = self._load_devices(user_id)
+        preferences = self._load_preferences(user_id)
         timings = {"preload": _ms(t)}
 
         # 2. Single inference on the managed agent runtime.
@@ -134,20 +143,21 @@ class Orchestrator:
                     utterance=utterance,
                     channel=channel,
                     devices=[_agent_view(d) for d in whitelist.values()],
+                    preferences=preferences,
                 )
             )
             plan = Plan.from_json(raw)
         except PlanParseError as exc:
-            timings["inference"] = _ms(t)
             # Raw model output goes to troubleshooting logs only.
             log.warning(
-                "plan_parse_failed",
+                "plan_parse_failed %s",
+                json.dumps({"request_id": request_id, "error": str(exc), "raw": raw[:2000]}, ensure_ascii=False),
                 extra={"request_id": request_id, "error": str(exc), "raw": raw[:2000]},
             )
-            self.metrics.put("PlanParseFailure", 1, "Count")
-            return self._finish(
-                OrchestratorResponse(request_id, "error", FALLBACK_REPLY), t0, timings
-            )
+            return self._fail(request_id, "PlanParseFailure", t, t0)
+        except Exception as exc:  # runtime or model failure: answer with the fallback, never a 5xx
+            log.exception("agent_invocation_failed %s", json.dumps({"request_id": request_id, "error": type(exc).__name__}))
+            return self._fail(request_id, "AgentInvocationFailure", t, t0)
         timings["inference"] = _ms(t)
 
         if plan.type == "control":
@@ -208,12 +218,11 @@ class Orchestrator:
     ) -> OrchestratorResponse:
         outcome = validate_plan(plan, whitelist)
         if outcome.rejected:
+            rejected = [asdict(r) for r in outcome.rejected]
             log.warning(
-                "plan_actions_rejected",
-                extra={
-                    "request_id": request_id,
-                    "rejected": [asdict(r) for r in outcome.rejected],
-                },
+                "plan_actions_rejected %s",
+                json.dumps({"request_id": request_id, "rejected": rejected}, ensure_ascii=False),
+                extra={"request_id": request_id, "rejected": rejected},
             )
             self.metrics.put("ActionsRejected", len(outcome.rejected), "Count")
 
@@ -305,6 +314,7 @@ class Orchestrator:
             return OrchestratorResponse(request_id, "clarify", "这个称呼没法对应到唯一的设备，能再说具体一点吗？")
         try:
             self.preferences.upsert(user_id, [record])
+            self.cache.pop_json(prefs_key(user_id))
         except Exception:  # memory is auxiliary; never fail the request on it
             log.exception("alias_write_failed", extra={"request_id": request_id})
             return OrchestratorResponse(request_id, "error", "暂时没能记住这个称呼，请稍后再试。")
@@ -356,6 +366,18 @@ class Orchestrator:
                 d.state = {**d.state, **s}
         return {d.uuid: d for d in devices}
 
+    def _load_preferences(self, user_id: str) -> list[str]:
+        cached = self.cache.get_json(prefs_key(user_id))
+        if cached is not None:
+            return cached
+        try:
+            texts = self.preferences.list_texts(user_id)
+        except Exception:  # preferences are auxiliary; never fail the request on them
+            log.exception("preference_read_failed")
+            return []
+        self.cache.set_json(prefs_key(user_id), texts, PREFS_CACHE_TTL)
+        return texts
+
     def _session_id(self, user_id: str) -> str:
         key = f"session:{user_id}"
         sid = self.cache.get_json(key)
@@ -382,6 +404,14 @@ class Orchestrator:
             self.metrics.put("PreferencesWritten", len(records), "Count")
         except Exception:
             log.exception("preference_write_failed", extra={"request_id": request_id})
+        finally:
+            self.cache.pop_json(prefs_key(user_id))  # next request re-reads the source of truth
+
+    def _fail(self, request_id: str, metric: str, t_inference: float, t0: float) -> OrchestratorResponse:
+        self.metrics.put(metric, 1, "Count")
+        return self._finish(
+            OrchestratorResponse(request_id, "error", FALLBACK_REPLY), t0, {"inference": _ms(t_inference)}
+        )
 
     def _finish(
         self, resp: OrchestratorResponse, t0: float, timings: dict[str, float]

@@ -39,6 +39,7 @@ class AgentRequest:
     utterance: str
     channel: str
     devices: list[dict[str, Any]] = field(default_factory=list)
+    preferences: list[str] = field(default_factory=list)
 
 
 class AgentClient(Protocol):
@@ -49,6 +50,7 @@ class AgentClient(Protocol):
 
 class PreferenceStore(Protocol):
     def upsert(self, user_id: str, records: list[PreferenceRecord]) -> None: ...
+    def list_texts(self, user_id: str) -> list[str]: ...
 
 
 class Metrics(Protocol):

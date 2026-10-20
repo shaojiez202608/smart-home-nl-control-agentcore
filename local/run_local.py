@@ -39,7 +39,7 @@ class LocalBedrockAgent:
         out = run_plan(
             utterance=request.utterance,
             devices=request.devices,
-            preferences=[r.text for r in self.prefs.for_user(request.user_id)],
+            preferences=request.preferences,
             history=[],
             channel=request.channel,
             status_lookup=lambda uuid: self.platform.devices[uuid].state,

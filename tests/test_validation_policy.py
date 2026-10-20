@@ -102,3 +102,17 @@ def test_device_from_another_home_is_rejected(wl):
 def test_malformed_model_output(raw):
     with pytest.raises(PlanParseError):
         Plan.from_json(raw)
+
+
+def test_digit_strings_are_accepted_as_integers_but_other_strings_are_not(wl):
+    ok = validate_plan(plan({"uuid": "dev-master-light", "action": "setBrightness", "params": {"brightness": "30"}}), wl)
+    bad = validate_plan(plan({"uuid": "dev-master-light", "action": "setBrightness", "params": {"brightness": "30%"}}), wl)
+    assert ok.actions[0].params == {"brightness": 30}
+    assert bad.actions == []
+
+
+def test_turn_on_with_a_value_becomes_the_matching_set_action(wl):
+    out = validate_plan(plan({"uuid": "dev-master-light", "action": "turnOn", "params": {"brightness": 40}}), wl)
+    assert [(a.action, a.params) for a in out.actions] == [("setBrightness", {"brightness": 40})]
+    other = validate_plan(plan({"uuid": "dev-master-light", "action": "turnOn", "params": {"volume": 40}}), wl)
+    assert other.actions == [] and "unknown_params" in other.rejected[0].reason

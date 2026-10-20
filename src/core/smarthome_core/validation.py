@@ -25,6 +25,14 @@ from .models import Device, Plan, PlannedAction, SkippedDevice
 
 MAX_ACTIONS_PER_REQUEST = 20
 
+# "turn on with a value" is expressed by a set* action that also switches the
+# device on. Only these explicit combinations are rewritten.
+_TURN_ON_WITH_VALUE = {
+    ("light", "brightness"): "setBrightness",
+    ("light", "kelvin"): "setColorTemperature",
+    ("air_conditioner", "celsius"): "setTemperature",
+}
+
 # Pairs of actions that contradict each other when requested together.
 _OPPOSITES = {
     frozenset({"turnOn", "turnOff"}),
@@ -58,6 +66,10 @@ def validate_plan(plan: Plan, whitelist: dict[str, Device]) -> ValidationOutcome
         if device is None:
             out.rejected.append(Rejection(act.uuid, act.action, "uuid_not_in_whitelist"))
             continue
+        if act.action == "turnOn" and len(act.params) == 1:
+            target = _TURN_ON_WITH_VALUE.get((device.type, next(iter(act.params))))
+            if target:
+                act = PlannedAction(act.uuid, target, act.params, act.params_source, act.name)
         spec = actions_for(device.type).get(act.action)
         if spec is None:
             out.rejected.append(Rejection(act.uuid, act.action, "action_not_supported"))
@@ -75,6 +87,11 @@ def validate_plan(plan: Plan, whitelist: dict[str, Device]) -> ValidationOutcome
                 Rejection(act.uuid, act.action, f"missing_params:{sorted(missing)}")
             )
             continue
+        # Models sometimes emit integers as strings ("30"); accept plain digit strings only.
+        act.params = {
+            k: int(v) if allowed[k].type == "int" and isinstance(v, str) and v.strip().isdigit() else v
+            for k, v in act.params.items()
+        }
         errors = [e for p in spec.params if (e := p.check(act.params[p.name]))]
         if errors:
             out.rejected.append(Rejection(act.uuid, act.action, "; ".join(errors)))
