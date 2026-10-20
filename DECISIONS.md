@@ -75,3 +75,29 @@ Each entry records the choice, the alternatives considered, and why the more con
 ## D13. Python everywhere, arm64
 * **Why:** one language for core, Lambdas, agent and CDK; Lambdas run on arm64, the agent container is ARM64
   (required by AgentCore Runtime).
+
+## D14. Prompt layout: one data block, no system-prompt caching
+* **Tried:** stable device data in a cacheable system prompt (with a cache point), state in the user message.
+* **Observed:** cache hits confirmed, no clear latency reduction, plan quality on the evaluation set regressed.
+* **Choice:** devices with their state in one data block in the user message; system prompt holds rules only.
+
+## D15. Nova Micro is not the default
+* **Observed:** locally comparable on the evaluation set, but on the deployed runtime many requests failed with
+  "Model produced invalid sequence as part of ToolUse".
+* **Choice:** keep Amazon Nova Lite as the default; `modelId` stays configurable. The orchestrator answers any
+  runtime or model failure with the fixed fallback instead of an error status.
+
+## D16. Memory reads off the waiting path
+* **Choice:** the orchestrator preloads preferences from the cache (filled from AgentCore Memory on a miss and
+  invalidated on every preference write) and sends them with the request; recent turns are kept in the runtime
+  session's microVM and read from Memory only for a new microVM. Memory remains the source of truth.
+
+## D17. Newest record wins for preferences
+* **Why:** `ListMemoryRecords` is eventually consistent, so an overwrite implemented as delete-then-create can
+  leave a superseded record. Reads keep only the newest record per device and attribute; each write deletes
+  every superseded record it can see.
+
+## D18. Narrow, explicit normalisation of model output
+* **Choice:** two rewrites only: digit-only strings for integer parameters become integers; `turnOn` with a
+  single value parameter (brightness, colour temperature, target temperature) becomes the matching `set*`
+  action. Everything else that does not match the catalogue is rejected.

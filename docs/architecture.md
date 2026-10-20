@@ -126,7 +126,8 @@ Design choices on this path:
 | Contradictions / duplicates / cap | `validation.py` | Opposite actions on one device are dropped and the user is asked; duplicates collapsed; action count capped. |
 | Same-name ambiguity | `ambiguity.py` | If the utterance names a device whose name or app alias is not unique and does not disambiguate it, no action is taken; the user is asked. |
 | Sensitive actions | `policy.py` | Defined per action: `lock.unlock`, `security_system.disarm`. Always held; confirmed only on the app API with a single-use, user-bound, short-lived token. |
-| Malformed output | `models.py`, `orchestrator.py` | Fixed fallback reply; raw output only in logs; counted. |
+| Malformed output | `models.py`, `orchestrator.py` | Fixed fallback reply; raw output only in logs; counted. Runtime or model errors get the same fallback, never an error status. |
+| Narrow normalisation | `validation.py` | Digit-only strings for integer parameters become integers; `turnOn` with one value parameter becomes the matching `set*` action. Nothing else is rewritten. |
 | Platform validation | `platform_api/handler.py` | The platform independently re-validates commands and membership. |
 
 ## Memory governance
@@ -134,10 +135,11 @@ Design choices on this path:
 | Rule | Implementation |
 |---|---|
 | Only explicit preferences | Taste parameters (brightness, colour temperature, target temperature, volume) of *accepted* actions, only if the value appears in the utterance; values the model took from preferences are never written back. Relative requests ("调暗一点") write nothing. |
-| One version per device and attribute | Before writing, existing records for the same `deviceUuid` + `attribute` (metadata filter) are deleted. |
+| One version per device and attribute | Before writing, existing records for the same `deviceUuid` + `attribute` (metadata filter) are deleted. Listing is eventually consistent, so reads keep only the newest record per device and attribute, and later writes remove any leftovers. |
 | Ageing | Records are created with an expiry (`preferenceTtlDays`, configurable). |
 | Aliases | Stored as auxiliary context, must map to a permitted device, cannot shadow an authoritative device name or app alias. |
 | Single writer | Only the orchestrator writes long-term records; the runtime role can only list records and write conversation events. |
+| Off the waiting path | The orchestrator sends preferences with the request (cache-backed, invalidated on write); recent turns are kept in the runtime session's microVM. Memory is read only on a cache miss or a new microVM. |
 
 ## Observability
 
@@ -165,6 +167,10 @@ use the `LatencyTotal` P95 metric over real traffic.
 * The voice channel in the prototype is driven with developer IAM credentials, not device certificates.
 * The model's `params_source` label proved unreliable in testing; it is only used to *exclude* values taken
   from preferences.
+* In the tested configuration the acceptance-latency P95 was above the configured target; the model call is
+  the largest share. See VERIFICATION.md for the method and what was tried.
+* Writing a memory record with an expiry required the IAM action
+  `bedrock-agentcore:UpdateMemoryRecordExpirySpecification` in testing; it is granted to the orchestrator.
 * Only overseas (non-China) AWS Regions are targeted; AgentCore is not listed for the China Regions (see below).
 
 ## Fact check
