@@ -1,0 +1,31 @@
+{
+  "_comment": "Synthetic demo data. No real users, homes or devices.",
+  "homes": [
+    {
+      "homeId": "home-a",
+      "members": [{"username": "demo-alice", "role": "owner"}],
+      "devices": [
+        {"uuid": "dev-master-light", "name": "主卧灯", "room": "主卧", "type": "light", "state": {"power": "on", "brightness": 80}},
+        {"uuid": "dev-living-light", "name": "客厅灯", "room": "客厅", "type": "light", "state": {"power": "on", "brightness": 100}, "aliases": ["大灯"]},
+        {"uuid": "dev-master-bedside", "name": "床头灯", "room": "主卧", "type": "light", "state": {"power": "off"}},
+        {"uuid": "dev-guest-bedside", "name": "床头灯", "room": "次卧", "type": "light", "state": {"power": "off"}},
+        {"uuid": "dev-master-curtain", "name": "主卧窗帘", "room": "主卧", "type": "curtain", "state": {"position": 100}},
+        {"uuid": "dev-front-lock", "name": "前门锁", "room": "玄关", "type": "lock", "state": {"locked": true}},
+        {"uuid": "dev-living-ac", "name": "客厅空调", "room": "客厅", "type": "air_conditioner", "state": {"power": "off"}},
+        {"uuid": "dev-home-security", "name": "安防系统", "room": "玄关", "type": "security_system", "state": {"armed": false}},
+        {"uuid": "dev-living-speaker", "name": "客厅音箱", "room": "客厅", "type": "speaker", "state": {"playing": false, "volume": 30}}
+      ]
+    },
+    {
+      "homeId": "home-b",
+      "members": [{"username": "demo-bob", "role": "owner"}],
+      "devices": [
+        {"uuid": "dev-b-living-light", "name": "客厅灯", "room": "客厅", "type": "light", "state": {"power": "on"}},
+        {"uuid": "dev-b-front-lock", "name": "前门锁", "room": "玄关", "type": "lock", "state": {"locked": true}}
+      ]
+    }
+  ],
+  "speakers": [
+    {"speakerId": "spk-home-a-living", "homeId": "home-a", "ownerUsername": "demo-alice"}
+  ]
+}
