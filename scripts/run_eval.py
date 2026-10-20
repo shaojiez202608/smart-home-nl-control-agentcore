@@ -59,7 +59,9 @@ def run_case(case: dict, agent_kind: str) -> tuple[list[str], dict]:
         agent = ScriptedAgent([case["model_output"]])
     else:
         agent = LocalBedrockAgent(platform, prefs)
-    orch = Orchestrator(cache=MemoryCache(), directory=platform, agent=agent, dispatcher=platform, preferences=prefs)
+    orch = Orchestrator(
+        cache=MemoryCache(), directory=platform, agent=agent, dispatcher=platform, preferences=prefs
+    )
     log = RecordingLog()
     t = time.perf_counter()
     resp = orch.handle("eval-user", case["utterance"], channel=case.get("channel", "app"))
@@ -101,8 +103,14 @@ def run_case(case: dict, agent_kind: str) -> tuple[list[str], dict]:
         if not vals or not all(isinstance(v, int) and v < pb["current"] for v in vals):
             fails.append(f"{pb['param']} not below current {pb['current']}: {vals}")
 
-    return fails, {"type": resp.type, "message": resp.message, "dispatched": dispatched, "held": held,
-                   "skipped": skipped, "seconds": round(elapsed, 3)}
+    return fails, {
+        "type": resp.type,
+        "message": resp.message,
+        "dispatched": dispatched,
+        "held": held,
+        "skipped": skipped,
+        "seconds": round(elapsed, 3),
+    }
 
 
 def main() -> int:
@@ -116,16 +124,29 @@ def main() -> int:
     results = []
     for case in cases:
         fails, observed = run_case(case, args.agent)
-        results.append({"id": case["id"], "category": case["category"], "passed": not fails, "failures": fails,
-                        "observed": observed})
+        results.append(
+            {
+                "id": case["id"],
+                "category": case["category"],
+                "passed": not fails,
+                "failures": fails,
+                "observed": observed,
+            }
+        )
         print(f"{'PASS' if not fails else 'FAIL'}  {case['id']:<28} {case['category']}")
         for f in fails:
             print(f"      - {f}")
     passed = sum(r["passed"] for r in results)
     print(f"\n{passed}/{len(results)} passed ({passed / len(results):.0%}) with --agent {args.agent}")
     Path(args.report).parent.mkdir(parents=True, exist_ok=True)
-    Path(args.report).write_text(json.dumps({"agent": args.agent, "passed": passed, "total": len(results),
-                                             "results": results}, ensure_ascii=False, indent=2), encoding="utf-8")
+    Path(args.report).write_text(
+        json.dumps(
+            {"agent": args.agent, "passed": passed, "total": len(results), "results": results},
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
     return 0 if passed == len(results) else 1
 
 

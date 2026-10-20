@@ -82,9 +82,7 @@ class Plan:
                     action=str(a["action"]),
                     params=dict(a.get("params") or {}),
                     params_source=(
-                        a.get("params_source")
-                        if a.get("params_source") in PARAM_SOURCES
-                        else "default"
+                        a.get("params_source") if a.get("params_source") in PARAM_SOURCES else "default"
                     ),
                     name=str(a.get("name") or ""),
                 )
@@ -98,9 +96,7 @@ class Plan:
             ]
             alias_raw = d.get("alias")
             alias = (
-                AliasUpdate(uuid=str(alias_raw["uuid"]), alias=str(alias_raw["alias"]))
-                if alias_raw
-                else None
+                AliasUpdate(uuid=str(alias_raw["uuid"]), alias=str(alias_raw["alias"])) if alias_raw else None
             )
         except (KeyError, TypeError, ValueError, AttributeError) as exc:
             raise PlanParseError(f"malformed plan: {exc}") from exc

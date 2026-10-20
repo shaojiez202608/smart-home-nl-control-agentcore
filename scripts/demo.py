@@ -47,7 +47,8 @@ def speaker_roundtrip(out: dict, speaker_id: str, utterance: str, timeout: float
     )
     conn.connect().result(10)
     fut, _ = conn.subscribe(
-        topic=reply_topic, qos=mqtt.QoS.AT_LEAST_ONCE,
+        topic=reply_topic,
+        qos=mqtt.QoS.AT_LEAST_ONCE,
         callback=lambda topic, payload, **kw: received.update(json.loads(payload)),
     )
     fut.result(10)

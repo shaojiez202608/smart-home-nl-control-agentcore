@@ -48,7 +48,11 @@ def _plain(o: Any) -> Any:
 
 
 def _resp(status: int, body: Any) -> dict:
-    return {"statusCode": status, "headers": {"content-type": "application/json"}, "body": json.dumps(_plain(body), ensure_ascii=False)}
+    return {
+        "statusCode": status,
+        "headers": {"content-type": "application/json"},
+        "body": json.dumps(_plain(body), ensure_ascii=False),
+    }
 
 
 def _home_of(user_id: str) -> str | None:
@@ -89,8 +93,10 @@ def send_command(device_uuid: str, body: dict) -> dict:
     action, params = body.get("action"), body.get("params") or {}
     spec = actions_for(d["type"]).get(action)
     # The existing platform validates commands on its own, independent of the NL path.
-    if spec is None or set(params) != {p.name for p in spec.params} or any(
-        p.check(params[p.name]) for p in spec.params
+    if (
+        spec is None
+        or set(params) != {p.name for p in spec.params}
+        or any(p.check(params[p.name]) for p in spec.params)
     ):
         return _resp(400, {"error": "invalid command"})
     command_id = uuidlib.uuid4().hex

@@ -55,10 +55,14 @@ def handler(event: dict, context: Any) -> None:
         ReturnValues="ALL_NEW",
     )["Attributes"]
 
-    state = json.loads(json.dumps(item.get("state", {}), default=lambda d: int(d) if d == int(d) else float(d)))
+    state = json.loads(
+        json.dumps(item.get("state", {}), default=lambda d: int(d) if d == int(d) else float(d))
+    )
     cache.set_json(state_key(device_uuid), state, STATE_TTL)
 
-    members = members_t.query(IndexName="byHome", KeyConditionExpression=Key("homeId").eq(item["homeId"]))["Items"]
+    members = members_t.query(IndexName="byHome", KeyConditionExpression=Key("homeId").eq(item["homeId"]))[
+        "Items"
+    ]
     payload = json.dumps({"uuid": device_uuid, "state": state, "commandId": command_id, "ts": now}).encode()
     for m in members:
         iot.publish(topic=f"{TOPIC_PREFIX}/members/{m['userId']}/events", qos=0, payload=payload)

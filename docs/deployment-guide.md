@@ -6,9 +6,8 @@
 
 | Tool | Notes |
 |---|---|
-| Python 3.12+ and [uv](https://docs.astral.sh/uv/) | Local tests, CDK app, Lambda layer build |
+| Python 3.12+ and [uv](https://docs.astral.sh/uv/) | Local tests, CDK app, Lambda layer and agent package build (ARM64 wheels; no Docker needed) |
 | Node.js 20+ | CDK CLI via `npx aws-cdk@latest` |
-| Docker (or a compatible runtime) able to build `linux/arm64` images | Agent container for AgentCore Runtime |
 | AWS CLI v2 and credentials for a **non-production** account | `aws sts get-caller-identity` must succeed |
 | CDK bootstrap in the target account and Region | `npx aws-cdk@latest bootstrap aws://<ACCOUNT_ID>/<REGION>` |
 | Model access | The configured Amazon Bedrock model (default Amazon Nova Lite) must be usable in the Region |

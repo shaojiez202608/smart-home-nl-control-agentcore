@@ -129,6 +129,8 @@ Design choices on this path:
 | Malformed output | `models.py`, `orchestrator.py` | Fixed fallback reply; raw output only in logs; counted. Runtime or model errors get the same fallback, never an error status. |
 | Narrow normalisation | `validation.py` | Digit-only strings for integer parameters become integers; `turnOn` with one value parameter becomes the matching `set*` action. Nothing else is rewritten. |
 | Platform validation | `platform_api/handler.py` | The platform independently re-validates commands and membership. |
+| Gateway policy | Cedar policy engine (`stack.py`) | Default deny; only the read-only tools are permitted for the agent's tokens. `controlDevice` cannot be called through the gateway. |
+| Runtime access | Runtime resource policy (`stack.py`) | Only the orchestrator role may invoke the runtime or assert a user id. |
 
 ## Memory governance
 
@@ -147,7 +149,7 @@ Design choices on this path:
   `LatencyDispatch`, cache hit/miss, actions dispatched/failed/rejected, sensitive actions held, ambiguous
   references, parse failures, model input/output tokens and agent tool calls (returned by the runtime).
 * Dashboard `<prefix>-dashboard` and an alarm on `LatencyTotal` P95 above the configured target.
-* The agent runs under the ADOT auto-instrumentation in the container. Viewing AgentCore spans in CloudWatch
+* The agent runs under the ADOT auto-instrumentation (`opentelemetry-instrument` entry point). Viewing AgentCore spans in CloudWatch
   requires CloudWatch Transaction Search, an account-level setting this stack does not change.
 * Device-side receipts: the command log records `accepted` and later `executed` from device reports, which is
   the part AgentCore observability does not cover.
@@ -192,4 +194,6 @@ Verified against official documentation on 2026-10-20.
 | AgentCore Runtime, Memory, Gateway, Identity and Observability are available in us-east-1; the Region table lists no China Regions. | [Supported AWS Regions](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/agentcore-regions.html) |
 | Nova Lite model id `amazon.nova-lite-v1:0`; US geo inference profile `us.amazon.nova-lite-v1:0` (from us-east-1 routes to us-east-1, us-east-2, us-west-2); Converse API and client-side tool calling supported; Bedrock's native "structured outputs" feature not supported. This repository gets structured output through tool calling (Strands `structured_output_model`). | [Nova Lite model card](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-amazon-nova-lite.html) |
 | ElastiCache IAM auth: Valkey 7.2+; TLS required; user id must equal user name; tokens valid 15 minutes; connections disconnected after 12 hours; requires `elasticache:Connect` on the cache and the user; serverless token requests include `ResourceType=ServerlessCache`. | [Authenticating with IAM](https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/auth-iam.html) |
+| Policy in AgentCore: engines associated with a gateway evaluate every tool call; default-deny and forbid-wins; `AgentCore::OAuthUser` principals come from the JWT `sub` with JWT claims as tags; the gateway execution role needs `AuthorizeAction`, `PartiallyAuthorizeActions` (on the engine and the gateway) and `GetPolicyEngine`; gateway modes `LOG_ONLY` / `ENFORCE`. | [Policy core concepts](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/policy-core-concepts.html), [Policy IAM permissions](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/policy-permissions.html); CloudFormation schema `AWS::BedrockAgentCore::Gateway` (`PolicyEngineConfiguration.Mode`) |
+| Runtime `LifecycleConfiguration` has `IdleRuntimeSessionTimeout` and `MaxLifetime`; sessions stop on inactivity (default 15 minutes) or at max lifetime (default 8 hours). | CloudFormation schema `AWS::BedrockAgentCore::Runtime`; [Use isolated sessions for agents](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/runtime-sessions.html) |
 | Strands Agents is hosted on AgentCore Runtime through the `bedrock-agentcore` SDK's `BedrockAgentCoreApp` entrypoint (HTTP contract above). | [Runtime service contract](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/runtime-service-contract.html); `bedrock-agentcore` 1.24.2 package |

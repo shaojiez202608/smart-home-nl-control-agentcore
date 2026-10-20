@@ -31,12 +31,12 @@ from aws_cdk import aws_cloudwatch as cw
 from aws_cdk import aws_cognito as cognito
 from aws_cdk import aws_dynamodb as ddb
 from aws_cdk import aws_ec2 as ec2
-from aws_cdk import aws_ecr_assets as ecr_assets
 from aws_cdk import aws_elasticache as elasticache
 from aws_cdk import aws_iam as iam
 from aws_cdk import aws_iot as iot
 from aws_cdk import aws_lambda as lambda_
 from aws_cdk import aws_logs as logs
+from aws_cdk import aws_s3_assets as s3_assets
 from aws_cdk import aws_secretsmanager as sm
 from aws_cdk import aws_sqs as sqs
 from aws_cdk import aws_wafv2 as wafv2
@@ -63,7 +63,9 @@ GATEWAY_SCOPE = "tools.invoke"
 
 
 class NlControlStack(Stack):
-    def __init__(self, scope: Construct, cid: str, *, config: dict[str, Any], layer_dir: Path, **kw) -> None:
+    def __init__(
+        self, scope: Construct, cid: str, *, config: dict[str, Any], layer_dir: Path, agent_dir: Path, **kw
+    ) -> None:
         super().__init__(scope, cid, **kw)
         c = config
         self.cfg = c
@@ -83,7 +85,9 @@ class NlControlStack(Stack):
             restrict_default_security_group=True,
             subnet_configuration=[
                 ec2.SubnetConfiguration(name="public", subnet_type=ec2.SubnetType.PUBLIC, cidr_mask=24),
-                ec2.SubnetConfiguration(name="private", subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS, cidr_mask=24),
+                ec2.SubnetConfiguration(
+                    name="private", subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS, cidr_mask=24
+                ),
             ],
         )
         vpc.add_flow_log("FlowLog", destination=ec2.FlowLogDestination.to_cloud_watch_logs(flow_logs))
@@ -94,12 +98,18 @@ class NlControlStack(Stack):
             self, "LambdaSg", vpc=vpc, allow_all_outbound=False, description="VPC Lambdas: egress only"
         )
         cache_sg = ec2.SecurityGroup(
-            self, "CacheSg", vpc=vpc, allow_all_outbound=False, description="Cache: ingress from VPC Lambdas only"
+            self,
+            "CacheSg",
+            vpc=vpc,
+            allow_all_outbound=False,
+            description="Cache: ingress from VPC Lambdas only",
         )
         cache_sg.add_ingress_rule(lambda_sg, ec2.Port.tcp(6379), "Valkey from VPC Lambdas")
         lambda_sg.add_egress_rule(cache_sg, ec2.Port.tcp(6379), "Valkey")
         lambda_sg.add_egress_rule(
-            ec2.Peer.any_ipv4(), ec2.Port.tcp(443), "HTTPS to AWS service endpoints and the platform API (via NAT)"
+            ec2.Peer.any_ipv4(),
+            ec2.Port.tcp(443),
+            "HTTPS to AWS service endpoints and the platform API (via NAT)",
         )
 
         # --------------------------------------------------------------- data
@@ -161,7 +171,10 @@ class NlControlStack(Stack):
             "PlatformApiKeySecret",
             description="API key of the (simulated) existing platform API",
             generate_secret_string=sm.SecretStringGenerator(
-                secret_string_template="{}", generate_string_key="apiKey", exclude_punctuation=True, password_length=40
+                secret_string_template="{}",
+                generate_string_key="apiKey",
+                exclude_punctuation=True,
+                password_length=40,
             ),
             removal_policy=RemovalPolicy.DESTROY,
         )
@@ -185,14 +198,18 @@ class NlControlStack(Stack):
                 parameters={"endpointType": "iot:Data-ATS"},
                 physical_resource_id=cr.PhysicalResourceId.of("iot-data-ats-endpoint"),
             ),
-            policy=cr.AwsCustomResourcePolicy.from_sdk_calls(resources=cr.AwsCustomResourcePolicy.ANY_RESOURCE),
+            policy=cr.AwsCustomResourcePolicy.from_sdk_calls(
+                resources=cr.AwsCustomResourcePolicy.ANY_RESOURCE
+            ),
             install_latest_aws_sdk=False,
         )
         iot_endpoint = "https://" + iot_ep.get_response_field("endpointAddress")
         topic_arn = f"arn:{Aws.PARTITION}:iot:{Aws.REGION}:{Aws.ACCOUNT_ID}:topic/{topic}"
 
         def publish(fn: lambda_.Function, pattern: str) -> None:
-            fn.add_to_role_policy(iam.PolicyStatement(actions=["iot:Publish"], resources=[f"{topic_arn}/{pattern}"]))
+            fn.add_to_role_policy(
+                iam.PolicyStatement(actions=["iot:Publish"], resources=[f"{topic_arn}/{pattern}"])
+            )
 
         # ----------------------------------------------- simulated platform
         platform_fn = self._function(
@@ -299,8 +316,20 @@ class NlControlStack(Stack):
         rule_errors = self._log_group("IotRuleErrors")
         rule_role = iam.Role(self, "IotRuleErrorRole", assumed_by=iam.ServicePrincipal("iot.amazonaws.com"))
         rule_errors.grant_write(rule_role)
-        self._iot_rule(f"{p_}_device_cmd", f"SELECT *, topic(3) AS uuid FROM '{topic}/devices/+/cmd'", device_fn, rule_errors, rule_role)
-        self._iot_rule(f"{p_}_device_state", f"SELECT *, topic(3) AS uuid FROM '{topic}/devices/+/state'", state_fn, rule_errors, rule_role)
+        self._iot_rule(
+            f"{p_}_device_cmd",
+            f"SELECT *, topic(3) AS uuid FROM '{topic}/devices/+/cmd'",
+            device_fn,
+            rule_errors,
+            rule_role,
+        )
+        self._iot_rule(
+            f"{p_}_device_state",
+            f"SELECT *, topic(3) AS uuid FROM '{topic}/devices/+/state'",
+            state_fn,
+            rule_errors,
+            rule_role,
+        )
 
         # ------------------------------------------------------------ identity
         pool = cognito.UserPool(
@@ -310,23 +339,40 @@ class NlControlStack(Stack):
             self_sign_up_enabled=False,
             sign_in_aliases=cognito.SignInAliases(username=True),
             password_policy=cognito.PasswordPolicy(
-                min_length=14, require_digits=True, require_lowercase=True, require_uppercase=True, require_symbols=True
+                min_length=14,
+                require_digits=True,
+                require_lowercase=True,
+                require_uppercase=True,
+                require_symbols=True,
             ),
             account_recovery=cognito.AccountRecovery.NONE,
             removal_policy=RemovalPolicy.DESTROY,
         )
-        pool.add_domain("Domain", cognito_domain=cognito.CognitoDomainOptions(domain_prefix=f"{p}-{Aws.ACCOUNT_ID}"))
+        domain = pool.add_domain(
+            "Domain", cognito_domain=cognito.CognitoDomainOptions(domain_prefix=f"{p}-{Aws.ACCOUNT_ID}")
+        )
         rs = pool.add_resource_server(
             "GatewayResourceServer",
             identifier=GATEWAY_SCOPE_SERVER,
-            scopes=[cognito.ResourceServerScope(scope_name=GATEWAY_SCOPE, scope_description="Invoke gateway tools")],
+            scopes=[
+                cognito.ResourceServerScope(
+                    scope_name=GATEWAY_SCOPE, scope_description="Invoke gateway tools"
+                )
+            ],
         )
         m2m = pool.add_client(
             "GatewayM2MClient",
             generate_secret=True,
             o_auth=cognito.OAuthSettings(
                 flows=cognito.OAuthFlows(client_credentials=True),
-                scopes=[cognito.OAuthScope.resource_server(rs, cognito.ResourceServerScope(scope_name=GATEWAY_SCOPE, scope_description="Invoke gateway tools"))],
+                scopes=[
+                    cognito.OAuthScope.resource_server(
+                        rs,
+                        cognito.ResourceServerScope(
+                            scope_name=GATEWAY_SCOPE, scope_description="Invoke gateway tools"
+                        ),
+                    )
+                ],
             ),
             access_token_validity=Duration.minutes(60),
             prevent_user_existence_errors=True,
@@ -394,11 +440,16 @@ class NlControlStack(Stack):
             f"{ac_arn}:token-vault/default",
         ]
 
+        gateway_arn_pattern = f"{ac_arn}:gateway/{p}-gateway*"
         gateway_role = iam.Role(
             self,
             "GatewayRole",
             assumed_by=iam.ServicePrincipal(
-                "bedrock-agentcore.amazonaws.com", conditions={"StringEquals": {"aws:SourceAccount": Aws.ACCOUNT_ID}}
+                "bedrock-agentcore.amazonaws.com",
+                conditions={
+                    "StringEquals": {"aws:SourceAccount": Aws.ACCOUNT_ID},
+                    "ArnLike": {"aws:SourceArn": gateway_arn_pattern},
+                },
             ),
         )
         gateway_role.add_to_policy(
@@ -409,6 +460,25 @@ class NlControlStack(Stack):
         )
         api_key_secret.grant_read(gateway_role)
 
+        # Default-deny Cedar policy engine: the agent may only call read-only tools,
+        # even though the gateway exposes the platform's controlDevice operation.
+        policy_engine = agentcore.CfnPolicyEngine(
+            self,
+            "GatewayPolicyEngine",
+            name=f"{p_}_tool_policies",
+            description="Default deny; read-only platform tools allowed for the agent's M2M client",
+        )
+        gateway_role.add_to_policy(
+            iam.PolicyStatement(
+                actions=[
+                    "bedrock-agentcore:GetPolicyEngine",
+                    "bedrock-agentcore:AuthorizeAction",
+                    "bedrock-agentcore:PartiallyAuthorizeActions",
+                ],
+                resources=[policy_engine.attr_policy_engine_arn, gateway_arn_pattern],
+            )
+        )
+
         gateway = agentcore.CfnGateway(
             self,
             "Gateway",
@@ -418,7 +488,14 @@ class NlControlStack(Stack):
             protocol_type="MCP",
             authorizer_type="CUSTOM_JWT",
             authorizer_configuration={
-                "customJwtAuthorizer": {"discoveryUrl": discovery, "allowedClients": [m2m.user_pool_client_id]}
+                "customJwtAuthorizer": {
+                    "discoveryUrl": discovery,
+                    "allowedClients": [m2m.user_pool_client_id],
+                }
+            },
+            policy_engine_configuration={
+                "arn": policy_engine.attr_policy_engine_arn,
+                "mode": c.get("gatewayPolicyMode", "ENFORCE"),
             },
         )
         gateway.node.add_dependency(gateway_role)
@@ -429,7 +506,11 @@ class NlControlStack(Stack):
             name="platform",
             description="Existing platform API: list devices, device status, control device",
             target_configuration={
-                "mcp": {"openApiSchema": {"inlinePayload": self.to_json_string(platform_openapi(platform_api.url))}}
+                "mcp": {
+                    "openApiSchema": {
+                        "inlinePayload": self.to_json_string(platform_openapi(platform_api.url))
+                    }
+                }
             },
             credential_provider_configurations=[
                 {
@@ -446,9 +527,32 @@ class NlControlStack(Stack):
         )
         target.node.add_dependency(gateway)
 
-        image = ecr_assets.DockerImageAsset(
-            self, "AgentImage", directory=str(ROOT / "src" / "agent"), platform=ecr_assets.Platform.LINUX_ARM64
+        issuer = f"https://cognito-idp.{Aws.REGION}.amazonaws.com/{pool.user_pool_id}"
+        read_only_tools = ", ".join(
+            f'AgentCore::Action::"platform___{op}"' for op in ("queryDeviceStatus", "getUserDevices")
         )
+        tool_policy = agentcore.CfnPolicy(
+            self,
+            "ReadOnlyToolsPolicy",
+            policy_engine_id=policy_engine.attr_policy_engine_id,
+            name="allow_read_only_platform_tools",
+            description="Permit the read-only platform tools for tokens issued by this stack's user pool",
+            definition={
+                "cedar": {
+                    "statement": (
+                        f"permit(principal is AgentCore::OAuthUser, action in [{read_only_tools}], "
+                        f'resource == AgentCore::Gateway::"{gateway.attr_gateway_arn}") '
+                        f'when {{ principal.hasTag("iss") && principal.getTag("iss") == "{issuer}" }};'
+                    )
+                }
+            },
+            validation_mode="FAIL_ON_ANY_FINDINGS",
+        )
+        # Policy validation reads the gateway's tool schema, which exists once the target has synced.
+        tool_policy.node.add_dependency(target)
+
+        # Direct code deployment: ARM64 wheels and agent source, zipped by CDK (see build.py).
+        agent_code = s3_assets.Asset(self, "AgentCode", path=str(agent_dir))
         runtime_role = iam.Role(
             self,
             "RuntimeRole",
@@ -460,9 +564,12 @@ class NlControlStack(Stack):
                 },
             ),
         )
-        image.repository.grant_pull(runtime_role)
         model_id = c["modelId"]
-        base_model = model_id.split(".", 1)[1] if model_id.split(".")[0] in ("us", "eu", "apac", "global") else model_id
+        base_model = (
+            model_id.split(".", 1)[1]
+            if model_id.split(".")[0] in ("us", "eu", "apac", "global")
+            else model_id
+        )
         runtime_policy = iam.Policy(
             self,
             "RuntimePolicy",
@@ -474,6 +581,11 @@ class NlControlStack(Stack):
                         f"arn:{Aws.PARTITION}:bedrock:*::foundation-model/{base_model}",
                     ],
                 ),
+                # Only the one deployment package object, not the whole bootstrap bucket.
+                iam.PolicyStatement(
+                    actions=["s3:GetObject"],
+                    resources=[agent_code.bucket.arn_for_objects(agent_code.s3_object_key)],
+                ),
                 iam.PolicyStatement(
                     actions=[
                         "bedrock-agentcore:ListMemoryRecords",
@@ -482,17 +594,20 @@ class NlControlStack(Stack):
                     ],
                     resources=[memory.attr_memory_arn],
                 ),
+                # The runtime delivers the workload access token to the container (the
+                # service-linked role obtains it), so only the token-vault read is granted,
+                # scoped to the one OAuth2 provider.
                 iam.PolicyStatement(
-                    actions=[
-                        "bedrock-agentcore:GetWorkloadAccessToken",
-                        "bedrock-agentcore:GetWorkloadAccessTokenForJWT",
-                        "bedrock-agentcore:GetWorkloadAccessTokenForUserId",
-                        "bedrock-agentcore:GetResourceOauth2Token",
-                    ],
+                    actions=["bedrock-agentcore:GetResourceOauth2Token"],
                     resources=[*identity_resources, oauth_provider.attr_credential_provider_arn],
                 ),
                 iam.PolicyStatement(
-                    actions=["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents", "logs:DescribeLogStreams"],
+                    actions=[
+                        "logs:CreateLogGroup",
+                        "logs:CreateLogStream",
+                        "logs:PutLogEvents",
+                        "logs:DescribeLogStreams",
+                    ],
                     resources=[
                         f"arn:{Aws.PARTITION}:logs:{Aws.REGION}:{Aws.ACCOUNT_ID}:log-group:/aws/bedrock-agentcore/runtimes/*"
                     ],
@@ -512,7 +627,6 @@ class NlControlStack(Stack):
                     resources=["*"],
                     conditions={"StringEquals": {"cloudwatch:namespace": "bedrock-agentcore"}},
                 ),
-                iam.PolicyStatement(actions=["ecr:GetAuthorizationToken"], resources=["*"]),
             ],
         )
         runtime_role.attach_inline_policy(runtime_policy)
@@ -524,10 +638,25 @@ class NlControlStack(Stack):
             agent_runtime_name=f"{p_}_agent",
             description="Strands agent that turns utterances into structured plans",
             role_arn=runtime_role.role_arn,
-            agent_runtime_artifact={"containerConfiguration": {"containerUri": image.image_uri}},
+            agent_runtime_artifact={
+                "codeConfiguration": {
+                    "code": {"s3": {"bucket": agent_code.s3_bucket_name, "prefix": agent_code.s3_object_key}},
+                    "runtime": "PYTHON_3_13",
+                    "entryPoint": ["opentelemetry-instrument", "main.py"],
+                }
+            },
             network_configuration={"networkMode": "PUBLIC"},
             protocol_configuration="HTTP",
+            # Aligned with the orchestrator's session idle TTL, so a session id is not reused
+            # after its microVM (and the in-process history) is gone.
+            lifecycle_configuration={
+                "idleRuntimeSessionTimeout": int(c["sessionIdleSeconds"]),
+                "maxLifetime": int(c["runtimeMaxLifetimeSeconds"]),
+            },
             environment_variables={
+                "AGENT_OBSERVABILITY_ENABLED": "true",
+                "OTEL_PYTHON_DISTRO": "aws_distro",
+                "OTEL_PYTHON_CONFIGURATOR": "aws_configurator",
                 "MODEL_ID": model_id,
                 "MODEL_MAX_TOKENS": str(c["modelMaxTokens"]),
                 "MEMORY_ID": memory.attr_memory_id,
@@ -555,6 +684,7 @@ class NlControlStack(Stack):
                 "TOPIC_PREFIX": topic,
                 "IOT_DATA_ENDPOINT": iot_endpoint,
                 "METRICS_NAMESPACE": "SmartHomeNL",
+                "SESSION_IDLE_SECONDS": str(c["sessionIdleSeconds"]),
                 **self._cache_env(cache, cache_user),
             },
             vpc=vpc,
@@ -567,11 +697,47 @@ class NlControlStack(Stack):
         api_key_secret.grant_read(orch_fn)
         self._grant_cache(orch_fn, cache, cache_user)
         publish(orch_fn, "speakers/*/reply")
+        invoke_actions = [
+            "bedrock-agentcore:InvokeAgentRuntime",
+            "bedrock-agentcore:InvokeAgentRuntimeForUser",
+        ]
         orch_fn.add_to_role_policy(
             iam.PolicyStatement(
-                actions=["bedrock-agentcore:InvokeAgentRuntime", "bedrock-agentcore:InvokeAgentRuntimeForUser"],
-                resources=[runtime.attr_agent_runtime_arn, f"{runtime.attr_agent_runtime_arn}/runtime-endpoint/*"],
+                actions=invoke_actions,
+                resources=[
+                    runtime.attr_agent_runtime_arn,
+                    f"{runtime.attr_agent_runtime_arn}/runtime-endpoint/*",
+                ],
             )
+        )
+        # Resource policy: only the orchestrator may invoke the runtime (and assert a user id),
+        # whatever identity-based policies other principals in the account might have.
+        agentcore.CfnResourcePolicy(
+            self,
+            "RuntimeResourcePolicy",
+            resource_arn=runtime.attr_agent_runtime_arn,
+            policy=self.to_json_string(
+                {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Sid": "AllowOrchestratorOnly",
+                            "Effect": "Allow",
+                            "Principal": {"AWS": orch_fn.role.role_arn},
+                            "Action": invoke_actions,
+                            "Resource": runtime.attr_agent_runtime_arn,
+                        },
+                        {
+                            "Sid": "DenyEveryoneElse",
+                            "Effect": "Deny",
+                            "Principal": {"AWS": "*"},
+                            "Action": invoke_actions,
+                            "Resource": runtime.attr_agent_runtime_arn,
+                            "Condition": {"ArnNotEquals": {"aws:PrincipalArn": orch_fn.role.role_arn}},
+                        },
+                    ],
+                }
+            ),
         )
         orch_fn.add_to_role_policy(
             iam.PolicyStatement(
@@ -609,7 +775,9 @@ class NlControlStack(Stack):
                 type=apigw.JsonSchemaType.OBJECT,
                 required=["utterance"],
                 properties={
-                    "utterance": apigw.JsonSchema(type=apigw.JsonSchemaType.STRING, min_length=1, max_length=500),
+                    "utterance": apigw.JsonSchema(
+                        type=apigw.JsonSchemaType.STRING, min_length=1, max_length=500
+                    ),
                     "idempotencyKey": apigw.JsonSchema(type=apigw.JsonSchemaType.STRING, max_length=128),
                 },
             ),
@@ -620,20 +788,33 @@ class NlControlStack(Stack):
             schema=apigw.JsonSchema(
                 type=apigw.JsonSchemaType.OBJECT,
                 required=["token"],
-                properties={"token": apigw.JsonSchema(type=apigw.JsonSchemaType.STRING, min_length=8, max_length=64)},
+                properties={
+                    "token": apigw.JsonSchema(type=apigw.JsonSchemaType.STRING, min_length=8, max_length=64)
+                },
             ),
         )
         v1 = app_api.root.add_resource("v1")
         cmds = v1.add_resource("commands")
-        cmds.add_method("POST", oi, request_validator=validator, request_models={"application/json": cmd_model}, **auth)
+        cmds.add_method(
+            "POST", oi, request_validator=validator, request_models={"application/json": cmd_model}, **auth
+        )
         cmds.add_resource("{commandId}").add_method(
-            "GET", oi, request_validator=validator,
-            request_parameters={"method.request.path.commandId": True}, **auth
+            "GET",
+            oi,
+            request_validator=validator,
+            request_parameters={"method.request.path.commandId": True},
+            **auth,
         )
         v1.add_resource("devices").add_method("GET", oi, request_validator=validator, **auth)
         confs = v1.add_resource("confirmations")
         confs.add_method("GET", oi, request_validator=validator, **auth)
-        confs.add_method("POST", oi, request_validator=validator, request_models={"application/json": confirm_model}, **auth)
+        confs.add_method(
+            "POST",
+            oi,
+            request_validator=validator,
+            request_models={"application/json": confirm_model},
+            **auth,
+        )
 
         if c.get("enableWaf", True):
             self._waf([platform_api, app_api], p)
@@ -657,11 +838,16 @@ class NlControlStack(Stack):
             "TopicPrefix": topic,
             "IotDataEndpoint": iot_endpoint,
             "PlatformApiKeySecretArn": api_key_secret.secret_arn,
+            # Used by the e2e test to verify the gateway's Cedar policy with the agent's own client.
+            "GatewayClientId": m2m.user_pool_client_id,
+            "GatewayClientSecretArn": m2m_secret.secret_arn,
+            "TokenEndpoint": f"{domain.base_url()}/oauth2/token",
+            "GatewayScope": f"{GATEWAY_SCOPE_SERVER}/{GATEWAY_SCOPE}",
         }
         for k, v in out.items():
             CfnOutput(self, f"Out{k}", key=k, value=v)
 
-        apply_suppressions(self, base_model)
+        apply_suppressions(self, base_model, p)
 
     # ---------------------------------------------------------------- helpers
 
@@ -710,7 +896,9 @@ class NlControlStack(Stack):
         }
 
     @staticmethod
-    def _grant_cache(fn: lambda_.Function, cache: elasticache.CfnServerlessCache, user: elasticache.CfnUser) -> None:
+    def _grant_cache(
+        fn: lambda_.Function, cache: elasticache.CfnServerlessCache, user: elasticache.CfnUser
+    ) -> None:
         fn.add_to_role_policy(
             iam.PolicyStatement(actions=["elasticache:Connect"], resources=[cache.attr_arn, user.attr_arn])
         )
@@ -735,8 +923,15 @@ class NlControlStack(Stack):
                 throttling_burst_limit=t["burstLimit"] * (5 if api_key_required else 1),
                 access_log_destination=apigw.LogGroupLogDestination(access),
                 access_log_format=apigw.AccessLogFormat.json_with_standard_fields(
-                    caller=False, http_method=True, ip=True, protocol=True, request_time=True,
-                    resource_path=True, response_length=True, status=True, user=True,
+                    caller=False,
+                    http_method=True,
+                    ip=True,
+                    protocol=True,
+                    request_time=True,
+                    resource_path=True,
+                    response_length=True,
+                    status=True,
+                    user=True,
                 ),
             ),
         )
@@ -752,7 +947,11 @@ class NlControlStack(Stack):
                 sql=sql,
                 aws_iot_sql_version="2016-03-23",
                 rule_disabled=False,
-                actions=[iot.CfnTopicRule.ActionProperty(lambda_=iot.CfnTopicRule.LambdaActionProperty(function_arn=fn.function_arn))],
+                actions=[
+                    iot.CfnTopicRule.ActionProperty(
+                        lambda_=iot.CfnTopicRule.LambdaActionProperty(function_arn=fn.function_arn)
+                    )
+                ],
                 error_action=iot.CfnTopicRule.ActionProperty(
                     cloudwatch_logs=iot.CfnTopicRule.CloudwatchLogsActionProperty(
                         log_group_name=errors.log_group_name, role_arn=role.role_arn
@@ -791,7 +990,9 @@ class NlControlStack(Stack):
             scope="REGIONAL",
             default_action=wafv2.CfnWebACL.DefaultActionProperty(allow={}),
             visibility_config=wafv2.CfnWebACL.VisibilityConfigProperty(
-                cloud_watch_metrics_enabled=True, metric_name=f"{prefix}-web-acl", sampled_requests_enabled=True
+                cloud_watch_metrics_enabled=True,
+                metric_name=f"{prefix}-web-acl",
+                sampled_requests_enabled=True,
             ),
             rules=[
                 managed("AWSManagedRulesCommonRuleSet", 1),
@@ -806,7 +1007,9 @@ class NlControlStack(Stack):
                         )
                     ),
                     visibility_config=wafv2.CfnWebACL.VisibilityConfigProperty(
-                        cloud_watch_metrics_enabled=True, metric_name="RateLimitPerIp", sampled_requests_enabled=True
+                        cloud_watch_metrics_enabled=True,
+                        metric_name="RateLimitPerIp",
+                        sampled_requests_enabled=True,
                     ),
                 ),
             ],
@@ -834,7 +1037,13 @@ class NlControlStack(Stack):
         dims = {"Service": "orchestrator"}
 
         def m(name: str, stat: str) -> cw.Metric:
-            return cw.Metric(namespace=ns, metric_name=name, dimensions_map=dims, statistic=stat, period=Duration.minutes(1))
+            return cw.Metric(
+                namespace=ns,
+                metric_name=name,
+                dimensions_map=dims,
+                statistic=stat,
+                period=Duration.minutes(1),
+            )
 
         total_p95 = m("LatencyTotal", "p95")
         cw.Alarm(
@@ -863,12 +1072,24 @@ class NlControlStack(Stack):
             ),
             cw.GraphWidget(
                 title="Hard checks",
-                left=[m(n, "Sum") for n in ("ActionsRejected", "SensitiveActionsHeld", "AmbiguousReferences", "PlanParseFailure", "ConfirmationRejected")],
+                left=[
+                    m(n, "Sum")
+                    for n in (
+                        "ActionsRejected",
+                        "SensitiveActionsHeld",
+                        "AmbiguousReferences",
+                        "PlanParseFailure",
+                        "ConfirmationRejected",
+                    )
+                ],
                 width=12,
             ),
             cw.GraphWidget(
                 title="Context cache and dispatch",
-                left=[m(n, "Sum") for n in ("DeviceCacheHit", "DeviceCacheMiss", "ActionsDispatched", "DispatchFailures")],
+                left=[
+                    m(n, "Sum")
+                    for n in ("DeviceCacheHit", "DeviceCacheMiss", "ActionsDispatched", "DispatchFailures")
+                ],
                 width=12,
             ),
             cw.GraphWidget(
@@ -889,4 +1110,3 @@ class NlControlStack(Stack):
                 width=24,
             ),
         )
-

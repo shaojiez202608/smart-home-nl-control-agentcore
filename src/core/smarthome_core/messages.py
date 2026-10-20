@@ -79,10 +79,7 @@ def control_reply(
     if ok:
         sentences.append(
             "已下发指令："
-            + _join(
-                describe_action(dev(r.uuid), PlannedAction(r.uuid, r.action, r.params))
-                for r in ok
-            )
+            + _join(describe_action(dev(r.uuid), PlannedAction(r.uuid, r.action, r.params)) for r in ok)
         )
     if failed:
         sentences.append("下发失败：" + _join(dev(r.uuid).name for r in failed) + "，请稍后重试")
@@ -91,7 +88,9 @@ def control_reply(
             "需要你在 App 中确认后才会执行：" + _join(describe_action(dev(a.uuid), a) for a in held)
         )
     if denied:
-        sentences.append("出于安全考虑，以下操作不会执行：" + _join(describe_action(dev(a.uuid), a) for a in denied))
+        sentences.append(
+            "出于安全考虑，以下操作不会执行：" + _join(describe_action(dev(a.uuid), a) for a in denied)
+        )
     for s in skipped:
         sentences.append(f"{dev(s.uuid).name}保持当前状态（{s.reason}）")
     if conflicts:

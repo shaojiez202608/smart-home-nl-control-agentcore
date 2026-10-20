@@ -35,6 +35,11 @@ def handler(event: dict, context: Any) -> None:
         topic=f"{TOPIC_PREFIX}/devices/{device_uuid}/state",
         qos=1,
         payload=json.dumps(
-            {"commandId": event.get("commandId"), "result": result, "reported": reported, "ts": int(time.time())}
+            {
+                "commandId": event.get("commandId"),
+                "result": result,
+                "reported": reported,
+                "ts": int(time.time()),
+            }
         ).encode(),
     )

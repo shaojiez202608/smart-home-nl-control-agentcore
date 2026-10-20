@@ -1,4 +1,4 @@
-# AgentCore Runtime requires an ARM64 container image.
+# Optional container path (not used by default; see DECISIONS.md D26). The default deploys the agent as a zip.
 FROM --platform=linux/arm64 public.ecr.aws/docker/library/python:3.13-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 \

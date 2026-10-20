@@ -10,8 +10,17 @@
   "memoryEventExpiryDays": 30,
   "preferenceTtlDays": 90,
   "acceptanceLatencyTargetMs": 1000,
-  "apiThrottle": {"rateLimit": 20, "burstLimit": 40},
+  "apiThrottle": {
+    "rateLimit": 20,
+    "burstLimit": 40
+  },
   "natGateways": 2,
   "enableWaf": true,
-  "tags": {"Project": "proto-nl", "Purpose": "prototype"}
+  "tags": {
+    "Project": "proto-nl",
+    "Purpose": "prototype"
+  },
+  "gatewayPolicyMode": "ENFORCE",
+  "sessionIdleSeconds": 900,
+  "runtimeMaxLifetimeSeconds": 28800
 }

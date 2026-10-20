@@ -101,3 +101,53 @@ Each entry records the choice, the alternatives considered, and why the more con
 * **Choice:** two rewrites only: digit-only strings for integer parameters become integers; `turnOn` with a
   single value parameter (brightness, colour temperature, target temperature) becomes the matching `set*`
   action. Everything else that does not match the catalogue is rejected.
+
+## D19. Second review against recent AgentCore samples
+A second review against recent public AgentCore samples. Changes
+adopted from it are D20-D25; items considered and not adopted are listed at the end of this entry.
+* Not adopted at the time: Runtime direct code deployment (adopted later, see D26); CDK L2 constructs (the OpenAPI target with an API-key provider still needs L1); vended log delivery
+  for Memory and Gateway (it creates CloudWatch Logs resource policies at account level that the stack would not
+  own); AgentCore Evaluations and online evaluation (need CloudWatch Transaction Search, an account setting); IAM
+  ABAC on Memory actor/namespace (the orchestrator writes for many users, so per-user session tags do not apply).
+
+## D20. Runtime resource policy
+Only the orchestrator role may call `InvokeAgentRuntime` / `InvokeAgentRuntimeForUser`; every other principal is
+explicitly denied, whatever its identity-based permissions. This bounds the trust placed in `runtimeUserId`.
+
+## D21. Default-deny Cedar policy engine on the gateway
+The gateway still exposes all three platform operations (the API is wrapped as-is), but the policy engine,
+attached in `ENFORCE` mode (`gatewayPolicyMode`), permits only `queryDeviceStatus` and `getUserDevices` for
+tokens from this stack's user pool. `controlDevice` is denied at the gateway, so device state can only change
+through the orchestrator's validated path even if the agent were changed to call it.
+
+## D22. Trust policies with source ARN
+The gateway role's trust policy adds `aws:SourceArn` (this stack's gateway name pattern) to `aws:SourceAccount`;
+the runtime role already had both.
+
+## D23. Narrower identity permissions for the runtime
+The runtime no longer holds `GetWorkloadAccessToken*`: the workload access token is delivered to the container
+by the runtime. It keeps `GetResourceOauth2Token` on the workload-identity directory, the token vault and the one
+OAuth2 provider.
+
+## D24. Explicit runtime lifecycle
+`idleRuntimeSessionTimeout` equals the orchestrator's session idle TTL (`sessionIdleSeconds`), so a session id
+expires in the cache when its microVM (and the in-process conversation history) is gone; `maxLifetime` is a
+parameter.
+
+## D25. Batch-call failures and identity cross-check in the agent
+`BatchCreateMemoryRecords` failures (`failedRecords`) raise; partial delete failures are logged. The agent tags
+traces with user and session, and rejects a payload whose user differs from the runtime user header when the
+runtime exposes that header to the container.
+
+## D26. Direct code deployment for the agent (no Docker)
+* **Choice:** the agent ships as an AgentCore Runtime direct code deployment: `infra/smarthome_infra/build.py`
+  installs ARM64 wheels for Python 3.13 with `uv pip install --python-platform aarch64-manylinux2014
+  --only-binary :all:`, adds `agent_app/` and a root `main.py`, and CDK uploads the directory as an S3 asset
+  (`runtime: PYTHON_3_13`, entry point `opentelemetry-instrument main.py`). The runtime role may read only that
+  one object.
+* **Why:** deploying needs no Docker or other container runtime, only uv and Node.js; the build is the same on
+  any OS. Memory clients and the identity-token function are created per call, because a code-deployed
+  runtime may start from a snapshot and keep credentials captured at start-up.
+* **Alternative:** the container image (`src/agent/Dockerfile`, kept as an optional path for teams that need
+  system packages). It needs a local runtime able to build `linux/arm64` images and leaves images in the CDK
+  bootstrap ECR repository.

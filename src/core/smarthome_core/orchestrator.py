@@ -95,6 +95,7 @@ class Orchestrator:
         preferences: PreferenceStore,
         metrics: Metrics | None = None,
         max_workers: int = 8,
+        session_idle_seconds: int = SESSION_IDLE_TTL,
     ) -> None:
         self.cache = cache
         self.directory = directory
@@ -103,6 +104,7 @@ class Orchestrator:
         self.preferences = preferences
         self.metrics = metrics or NullMetrics()
         self.max_workers = max_workers
+        self.session_idle_seconds = session_idle_seconds
 
     # ------------------------------------------------------------------ public
 
@@ -151,12 +153,17 @@ class Orchestrator:
             # Raw model output goes to troubleshooting logs only.
             log.warning(
                 "plan_parse_failed %s",
-                json.dumps({"request_id": request_id, "error": str(exc), "raw": raw[:2000]}, ensure_ascii=False),
+                json.dumps(
+                    {"request_id": request_id, "error": str(exc), "raw": raw[:2000]}, ensure_ascii=False
+                ),
                 extra={"request_id": request_id, "error": str(exc), "raw": raw[:2000]},
             )
             return self._fail(request_id, "PlanParseFailure", t, t0)
         except Exception as exc:  # runtime or model failure: answer with the fallback, never a 5xx
-            log.exception("agent_invocation_failed %s", json.dumps({"request_id": request_id, "error": type(exc).__name__}))
+            log.exception(
+                "agent_invocation_failed %s",
+                json.dumps({"request_id": request_id, "error": type(exc).__name__}),
+            )
             return self._fail(request_id, "AgentInvocationFailure", t, t0)
         timings["inference"] = _ms(t)
 
@@ -170,9 +177,7 @@ class Orchestrator:
 
         resp = self._finish(resp, t0, timings)
         if idempotency_key:
-            self.cache.set_json(
-                self._idem_key(user_id, idempotency_key), resp.to_dict(), IDEMPOTENCY_TTL
-            )
+            self.cache.set_json(self._idem_key(user_id, idempotency_key), resp.to_dict(), IDEMPOTENCY_TTL)
         return resp
 
     def pending_confirmations(self, user_id: str) -> list[dict[str, Any]]:
@@ -199,9 +204,7 @@ class Orchestrator:
         outcome = validate_plan(plan, whitelist)
         results = self._dispatch_all(user_id, outcome.actions, request_id)
         message = control_reply(whitelist, results, [], [], [], len(outcome.rejected), [])
-        resp = OrchestratorResponse(
-            request_id, "control", message, actions=_result_view(results, whitelist)
-        )
+        resp = OrchestratorResponse(request_id, "control", message, actions=_result_view(results, whitelist))
         return self._finish(resp, t0, {})
 
     # ----------------------------------------------------------------- control
@@ -270,8 +273,7 @@ class Orchestrator:
             actions=_result_view(results, whitelist),
             pending_confirmation=pending,
             skipped=[
-                {"uuid": s.uuid, "name": whitelist[s.uuid].name, "reason": s.reason}
-                for s in outcome.skipped
+                {"uuid": s.uuid, "name": whitelist[s.uuid].name, "reason": s.reason} for s in outcome.skipped
             ],
         )
 
@@ -311,7 +313,9 @@ class Orchestrator:
     ) -> OrchestratorResponse:
         record = alias_record(plan.alias, whitelist)
         if record is None:
-            return OrchestratorResponse(request_id, "clarify", "这个称呼没法对应到唯一的设备，能再说具体一点吗？")
+            return OrchestratorResponse(
+                request_id, "clarify", "这个称呼没法对应到唯一的设备，能再说具体一点吗？"
+            )
         try:
             self.preferences.upsert(user_id, [record])
             self.cache.pop_json(prefs_key(user_id))
@@ -353,9 +357,7 @@ class Orchestrator:
         if raw is None:
             self.metrics.put("DeviceCacheMiss", 1, "Count")
             devices = self.directory.list_user_devices(user_id)
-            self.cache.set_json(
-                devices_key(user_id), [d.to_dict() for d in devices], DEVICE_CACHE_TTL
-            )
+            self.cache.set_json(devices_key(user_id), [d.to_dict() for d in devices], DEVICE_CACHE_TTL)
         else:
             self.metrics.put("DeviceCacheHit", 1, "Count")
             devices = [Device.from_dict(d) for d in raw]
@@ -385,7 +387,7 @@ class Orchestrator:
             # AgentCore runtime session ids must be at least 33 characters.
             digest = hashlib.sha256(user_id.encode()).hexdigest()[:12]
             sid = f"{digest}-{uuidlib.uuid4().hex}"
-        self.cache.set_json(key, sid, SESSION_IDLE_TTL)  # sliding idle timeout
+        self.cache.set_json(key, sid, self.session_idle_seconds)  # sliding idle timeout
         return sid
 
     def _write_preferences(

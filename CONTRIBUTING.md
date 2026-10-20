@@ -28,8 +28,12 @@ Use the GitHub issue tracker. Check existing open and recently closed issues fir
    npx aws-cdk@latest synth -c config=config/sandbox.json --quiet   # runs cdk-nag
    ```
 
-4. Use clear commit messages. Never commit credentials, account IDs, or generated files under `.build/` or `.demo/`.
-5. Changes to validation, policy or memory rules must come with unit tests and, where it applies, eval cases.
+4. Use [Conventional Commits](https://www.conventionalcommits.org/) (`feat(core): ...`, `fix(infra): ...`); the
+   body says what changed, why, and how it was verified. One logical change per pull request.
+5. Never commit credentials, account IDs (use the documentation placeholder `111122223333`), customer data, or
+   generated files under `.build/` or `.demo/`.
+6. Every change needs tests. Changes to validation, policy, ambiguity or memory rules also need evaluation cases.
+7. If you use AI assistants, you must be able to explain every line they produced (see `AGENTS.md`).
 
 ## Security issue notifications
 

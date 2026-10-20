@@ -77,15 +77,11 @@ def validate_plan(plan: Plan, whitelist: dict[str, Device]) -> ValidationOutcome
         allowed = {p.name: p for p in spec.params}
         unknown = set(act.params) - set(allowed)
         if unknown:
-            out.rejected.append(
-                Rejection(act.uuid, act.action, f"unknown_params:{sorted(unknown)}")
-            )
+            out.rejected.append(Rejection(act.uuid, act.action, f"unknown_params:{sorted(unknown)}"))
             continue
         missing = set(allowed) - set(act.params)
         if missing:
-            out.rejected.append(
-                Rejection(act.uuid, act.action, f"missing_params:{sorted(missing)}")
-            )
+            out.rejected.append(Rejection(act.uuid, act.action, f"missing_params:{sorted(missing)}"))
             continue
         # Models sometimes emit integers as strings ("30"); accept plain digit strings only.
         act.params = {
@@ -97,9 +93,7 @@ def validate_plan(plan: Plan, whitelist: dict[str, Device]) -> ValidationOutcome
             out.rejected.append(Rejection(act.uuid, act.action, "; ".join(errors)))
             continue
         # Normalise numeric params to int (the model may emit 30.0).
-        params = {
-            k: int(v) if allowed[k].type == "int" else v for k, v in act.params.items()
-        }
+        params = {k: int(v) if allowed[k].type == "int" else v for k, v in act.params.items()}
         by_device.setdefault(act.uuid, []).append(
             PlannedAction(act.uuid, act.action, params, act.params_source)
         )

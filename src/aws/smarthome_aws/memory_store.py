@@ -14,12 +14,20 @@ superseded record behind. Two rules keep the behaviour correct anyway:
 
 from __future__ import annotations
 
+import json
+import logging
 import os
 import uuid
 from datetime import UTC, datetime
 
 import boto3
 from smarthome_core.memory_policy import PREFERENCE_TTL_DAYS, PreferenceRecord
+
+log = logging.getLogger(__name__)
+
+
+class MemoryWriteError(RuntimeError):
+    """AgentCore Memory rejected a record in a batch call."""
 
 
 def preferences_namespace(user_id: str) -> str:
@@ -59,11 +67,14 @@ class AgentCoreMemoryStore:
                 ],
             ).get("memoryRecordSummaries", [])
             if existing:
-                self.client.batch_delete_memory_records(
+                deleted = self.client.batch_delete_memory_records(
                     memoryId=self.memory_id,
                     records=[{"memoryRecordId": r["memoryRecordId"], "namespace": ns} for r in existing],
                 )
-            self.client.batch_create_memory_records(
+                # A failed delete only leaves a superseded record behind (reads keep the newest).
+                if deleted.get("failedRecords"):
+                    log.warning("memory_delete_partial %s", json.dumps(deleted["failedRecords"], default=str))
+            created = self.client.batch_create_memory_records(
                 memoryId=self.memory_id,
                 records=[
                     {
@@ -81,6 +92,9 @@ class AgentCoreMemoryStore:
                 # Tagged union: exactly one of recordExpiryDurationDays / action may be set.
                 recordExpirySpecification={"recordExpiryDurationDays": self.ttl_days},
             )
+            # Batch APIs report per-record failures in the response body, not as exceptions.
+            if created.get("failedRecords"):
+                raise MemoryWriteError(json.dumps(created["failedRecords"], default=str))
 
 
 def _meta(record: dict, key: str) -> str:

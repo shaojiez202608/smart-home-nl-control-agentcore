@@ -17,8 +17,11 @@ class RuntimeAgentClient:
         self.metrics = metrics
         self.client = boto3.client(
             "bedrock-agentcore",
-            config=Config(connect_timeout=2, read_timeout=int(os.environ.get("AGENT_READ_TIMEOUT", "15")),
-                          retries={"max_attempts": 1}),
+            config=Config(
+                connect_timeout=2,
+                read_timeout=int(os.environ.get("AGENT_READ_TIMEOUT", "15")),
+                retries={"max_attempts": 1},
+            ),
         )
 
     def plan(self, request: AgentRequest) -> str:

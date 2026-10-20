@@ -45,7 +45,12 @@ app = BedrockAgentCoreApp()
 # session id holds this session's recent turns. Memory stays the durable copy
 # and is read only when the session's microVM is new.
 _HISTORY: dict[str, list[dict[str, str]]] = {}
-memory = boto3.client("bedrock-agentcore", region_name=REGION)
+
+
+def _memory():
+    # Created per call, not at import: a direct-code-deployment runtime may start
+    # from a snapshot, and a client built at import keeps the credentials from then.
+    return boto3.client("bedrock-agentcore", region_name=REGION)
 
 
 def preferences_namespace(user_id: str) -> str:
@@ -56,7 +61,7 @@ def read_preferences(user_id: str) -> list[str]:
     if not MEMORY_ID:
         return []
     try:
-        resp = memory.list_memory_records(
+        resp = _memory().list_memory_records(
             memoryId=MEMORY_ID, namespace=preferences_namespace(user_id), maxResults=100
         )
         newest: dict[tuple[str, str], dict] = {}
@@ -75,7 +80,7 @@ def read_history(user_id: str, session_id: str) -> list[dict[str, str]]:
     if not MEMORY_ID:
         return []
     try:
-        resp = memory.list_events(
+        resp = _memory().list_events(
             memoryId=MEMORY_ID,
             actorId=user_id,
             sessionId=session_id,
@@ -106,7 +111,7 @@ def write_turn(user_id: str, session_id: str, utterance: str, plan: dict[str, An
     if not MEMORY_ID:
         return
     try:
-        memory.create_event(
+        _memory().create_event(
             memoryId=MEMORY_ID,
             actorId=user_id,
             sessionId=session_id,
@@ -120,9 +125,13 @@ def write_turn(user_id: str, session_id: str, utterance: str, plan: dict[str, An
         log.exception("write_turn_failed")
 
 
-@requires_access_token(provider_name=OAUTH_PROVIDER or "unset", scopes=[OAUTH_SCOPE], auth_flow="M2M")
-def _gateway_token(*, access_token: str) -> str:
-    return access_token
+def _gateway_token() -> str:
+    # Decorated per call for the same reason as _memory().
+    @requires_access_token(provider_name=OAUTH_PROVIDER or "unset", scopes=[OAUTH_SCOPE], auth_flow="M2M")
+    def fetch(*, access_token: str) -> str:
+        return access_token
+
+    return fetch()
 
 
 def gateway_status_lookup(user_id: str):
@@ -142,9 +151,28 @@ def gateway_status_lookup(user_id: str):
     return lookup
 
 
+RUNTIME_USER_HEADER = "x-amzn-bedrock-agentcore-runtime-user-id"
+
+
+def _runtime_user_id() -> str | None:
+    """User id set by the caller through runtimeUserId, if the runtime exposes it to the container."""
+    try:
+        from bedrock_agentcore.runtime import BedrockAgentCoreContext
+
+        headers = BedrockAgentCoreContext.get_request_headers() or {}
+    except Exception:
+        return None
+    return next((v for k, v in headers.items() if k.lower() == RUNTIME_USER_HEADER), None)
+
+
 @app.entrypoint
 def invoke(payload: dict[str, Any], context: Any = None) -> dict[str, Any]:
     user_id = str(payload["user_id"])
+    asserted = _runtime_user_id()
+    if asserted is not None and asserted != user_id:
+        # The payload must describe the same user the caller asserted to AgentCore Identity.
+        log.warning(json.dumps({"event": "user_mismatch"}))
+        raise PermissionError("user identity mismatch")
     session_id = str(payload.get("session_id") or getattr(context, "session_id", "") or "default-session")
     utterance = str(payload.get("utterance", ""))[:500]
     t0 = time.perf_counter()
@@ -166,6 +194,7 @@ def invoke(payload: dict[str, Any], context: Any = None) -> dict[str, Any]:
         history=history,
         channel=str(payload.get("channel", "app")),
         status_lookup=gateway_status_lookup(user_id),
+        trace_attributes={"user.id": user_id, "session.id": session_id},
     )
     out["timings_ms"] = {
         "memory_read": round((t1 - t0) * 1000, 1),
@@ -177,7 +206,12 @@ def invoke(payload: dict[str, Any], context: Any = None) -> dict[str, Any]:
     ).start()
     log.info(
         json.dumps(
-            {"event": "plan_ready", "type": out["plan"]["type"], "usage": out["usage"], "tool_calls": out["tool_calls"]}
+            {
+                "event": "plan_ready",
+                "type": out["plan"]["type"],
+                "usage": out["usage"],
+                "tool_calls": out["tool_calls"],
+            }
         )
     )
     return out

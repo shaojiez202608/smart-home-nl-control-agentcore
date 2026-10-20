@@ -1,5 +1,7 @@
 # Threat model
 
+> **DRAFT - not approved for production use.** Review with the customer's security team before any further use.
+
 Scope: the prototype as deployed by `config/sandbox.json`. Untrusted input (natural-language utterances,
 device names and aliases, remembered preferences) is processed by a language model, so this model focuses on
 prompt injection, privilege escalation, data leakage and abuse.

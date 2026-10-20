@@ -1,0 +1,11 @@
+name: Feature request
+description: Propose a change
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes: {label: Problem to solve}
+    validations: {required: true}
+  - type: textarea
+    id: proposal
+    attributes: {label: Proposal, description: "Include how it would be tested (unit tests, evaluation cases, e2e checks)."}

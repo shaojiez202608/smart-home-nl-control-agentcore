@@ -3,8 +3,10 @@
 ## Destroy the stack
 
 ```bash
-npx aws-cdk@latest destroy -c config=config/sandbox.json --force
+make destroy            # npx aws-cdk@latest destroy -c config=config/sandbox.json (asks for confirmation)
+make verify-cleanup     # read-only: lists anything of this prototype still present; exits non-zero if so
 ```
+For several Regions: `uv run python scripts/verify_cleanup.py --regions us-west-2 us-east-1`.
 
 With `config/sandbox.json` every resource created by the stack is deleted.
 
@@ -14,8 +16,7 @@ With `config/sandbox.json` every resource created by the stack is deleted.
 |---|---|---|
 | Log group `/aws/bedrock-agentcore/runtimes/<runtime-id>-DEFAULT` | Created by AgentCore Runtime for the agent's logs | `aws logs delete-log-group --log-group-name <name>` |
 | Log groups `/aws/lambda/<prefix>...` created by the CDK custom-resource provider (`AWS679f...`) | CDK provider function logs | Delete by name if present |
-| Container image in the CDK bootstrap ECR repository (`cdk-hnb659fds-container-assets-<ACCOUNT_ID>-<REGION>`) | Agent image asset | `aws ecr batch-delete-image` with the asset tag |
-| Lambda layer / function zip objects in the CDK bootstrap bucket | CDK assets | Optional; the bootstrap bucket is shared by all CDK apps in the account |
+| Agent package, Lambda layer and function zip objects in the CDK bootstrap bucket | CDK assets | Optional; the bootstrap bucket is shared by all CDK apps in the account |
 | Service-linked roles (for example `AWSServiceRoleForBedrockAgentCoreRuntimeIdentity`) | Created by AWS services on first use | Shared by the account; leave in place |
 | Local `.demo/` and `.build/` directories | Demo passwords and reports | `rm -rf .demo .build` |
 
@@ -37,8 +38,9 @@ aws elasticache describe-serverless-caches --serverless-cache-name ${P}-cache  #
 ```
 
 ## CDK assets in the shared bootstrap bucket
-The bootstrap bucket and container repository are shared by all CDK apps in the account. Remove only this
-project's assets: images whose tag equals an asset hash you built (`docker image ls | grep cdkasset-`), and
-object versions whose content is this project's (template description, Lambda handler source, or a layer zip
-containing `python/smarthome_core/`). Keep the generic CDK provider assets (`index.js`, `__entrypoint__.js`),
+The bootstrap bucket is shared by all CDK apps in the account. Remove only this project's assets: object
+versions whose key matches an asset hash in your `cdk.out/*.assets.json`, or whose content is this project's
+(template description, Lambda handler source, a layer zip containing `python/smarthome_core/`, or an agent zip
+containing `agent_app/`). If you used the optional container path, also delete the agent image tags from the
+bootstrap ECR repository. Keep the generic CDK provider assets (`index.js`, `__entrypoint__.js`),
 which other stacks may reference. The bucket is versioned, so delete by version id.

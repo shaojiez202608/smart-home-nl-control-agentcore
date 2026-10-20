@@ -22,7 +22,9 @@ def test_hallucinated_uuid_is_filtered(wl):
 
 
 def test_action_must_exist_for_device_type(wl):
-    out = validate_plan(plan({"uuid": "dev-front-lock", "action": "setBrightness", "params": {"brightness": 5}}), wl)
+    out = validate_plan(
+        plan({"uuid": "dev-front-lock", "action": "setBrightness", "params": {"brightness": 5}}), wl
+    )
     assert out.actions == []
     assert out.rejected[0].reason == "action_not_supported"
 
@@ -45,7 +47,9 @@ def test_parameter_bounds(wl, params, reason):
 
 
 def test_float_params_are_normalised(wl):
-    out = validate_plan(plan({"uuid": "dev-master-light", "action": "setBrightness", "params": {"brightness": 30.0}}), wl)
+    out = validate_plan(
+        plan({"uuid": "dev-master-light", "action": "setBrightness", "params": {"brightness": 30.0}}), wl
+    )
     assert out.actions[0].params == {"brightness": 30}
 
 
@@ -59,13 +63,20 @@ def test_contradictory_actions_cancel_and_flag_conflict(wl):
 
 def test_duplicates_collapse(wl):
     out = validate_plan(
-        plan({"uuid": "dev-living-light", "action": "turnOff"}, {"uuid": "dev-living-light", "action": "turnOff"}), wl
+        plan(
+            {"uuid": "dev-living-light", "action": "turnOff"},
+            {"uuid": "dev-living-light", "action": "turnOff"},
+        ),
+        wl,
     )
     assert len(out.actions) == 1
 
 
 def test_action_cap(wl):
-    many = [{"uuid": "dev-living-light", "action": "setBrightness", "params": {"brightness": i}} for i in range(1, 40)]
+    many = [
+        {"uuid": "dev-living-light", "action": "setBrightness", "params": {"brightness": i}}
+        for i in range(1, 40)
+    ]
     out = validate_plan(plan(*many), wl)
     assert len(out.actions) == MAX_ACTIONS_PER_REQUEST
 
@@ -98,21 +109,31 @@ def test_device_from_another_home_is_rejected(wl):
     assert out.actions == [] and out.rejected[0].reason == "uuid_not_in_whitelist"
 
 
-@pytest.mark.parametrize("raw", ["not json", "[]", '{"type": "dance"}', '{"type": "control", "actions": [{"x": 1}]}'])
+@pytest.mark.parametrize(
+    "raw", ["not json", "[]", '{"type": "dance"}', '{"type": "control", "actions": [{"x": 1}]}']
+)
 def test_malformed_model_output(raw):
     with pytest.raises(PlanParseError):
         Plan.from_json(raw)
 
 
 def test_digit_strings_are_accepted_as_integers_but_other_strings_are_not(wl):
-    ok = validate_plan(plan({"uuid": "dev-master-light", "action": "setBrightness", "params": {"brightness": "30"}}), wl)
-    bad = validate_plan(plan({"uuid": "dev-master-light", "action": "setBrightness", "params": {"brightness": "30%"}}), wl)
+    ok = validate_plan(
+        plan({"uuid": "dev-master-light", "action": "setBrightness", "params": {"brightness": "30"}}), wl
+    )
+    bad = validate_plan(
+        plan({"uuid": "dev-master-light", "action": "setBrightness", "params": {"brightness": "30%"}}), wl
+    )
     assert ok.actions[0].params == {"brightness": 30}
     assert bad.actions == []
 
 
 def test_turn_on_with_a_value_becomes_the_matching_set_action(wl):
-    out = validate_plan(plan({"uuid": "dev-master-light", "action": "turnOn", "params": {"brightness": 40}}), wl)
+    out = validate_plan(
+        plan({"uuid": "dev-master-light", "action": "turnOn", "params": {"brightness": 40}}), wl
+    )
     assert [(a.action, a.params) for a in out.actions] == [("setBrightness", {"brightness": 40})]
-    other = validate_plan(plan({"uuid": "dev-master-light", "action": "turnOn", "params": {"volume": 40}}), wl)
+    other = validate_plan(
+        plan({"uuid": "dev-master-light", "action": "turnOn", "params": {"volume": 40}}), wl
+    )
     assert other.actions == [] and "unknown_params" in other.rejected[0].reason

@@ -1,0 +1,15 @@
+title = "gitleaks configuration"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Justified exceptions only"
+paths = [
+  # Lock file: package hashes, not secrets.
+  '''uv\.lock''',
+]
+regexes = [
+  # AWS documentation placeholder account id used in CI synth.
+  '''111122223333''',
+]

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """CDK entrypoint.
 
-    npx aws-cdk@latest deploy -c config=config/sandbox.json
+npx aws-cdk@latest deploy -c config=config/sandbox.json
 """
 
 from __future__ import annotations
@@ -16,20 +16,23 @@ from cdk_nag import AwsSolutionsChecks
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from smarthome_infra.build import build_layer  # noqa: E402
+from smarthome_infra.build import build_agent_package, build_layer  # noqa: E402
+from smarthome_infra.config import validate  # noqa: E402
 from smarthome_infra.stack import NlControlStack  # noqa: E402
 
 app = cdk.App()
 config_path = Path(app.node.try_get_context("config") or "config/sandbox.json")
-config = json.loads(config_path.read_text(encoding="utf-8"))
+config = validate(json.loads(config_path.read_text(encoding="utf-8")))
 
 layer_dir = build_layer()
+agent_dir = build_agent_package()
 
 stack = NlControlStack(
     app,
     config["stackName"],
     config=config,
     layer_dir=layer_dir,
+    agent_dir=agent_dir,
     env=cdk.Environment(
         account=os.environ.get("CDK_DEFAULT_ACCOUNT"),
         region=os.environ.get("CDK_DEFAULT_REGION") or os.environ.get("AWS_REGION") or "us-east-1",

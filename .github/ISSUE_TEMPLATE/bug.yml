@@ -1,0 +1,15 @@
+name: Bug report
+description: Something does not work as documented
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes: {label: What happened, description: "Steps to reproduce, expected and actual behaviour."}
+    validations: {required: true}
+  - type: input
+    id: version
+    attributes: {label: Version or commit}
+    validations: {required: true}
+  - type: textarea
+    id: env
+    attributes: {label: Environment, description: "Region, config profile (sandbox/handover), tool versions. Never paste account ids or credentials."}

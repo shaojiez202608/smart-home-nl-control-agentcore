@@ -32,7 +32,7 @@ package = false
 default-groups = ["dev", "infra", "agent"]
 
 [tool.pytest.ini_options]
-pythonpath = ["src/core", "src/agent", "src/functions", "."]
+pythonpath = ["src/core", "src/agent", "src/functions", ".", "scripts"]
 testpaths = ["tests"]
 addopts = "-q"
 

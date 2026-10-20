@@ -148,10 +148,25 @@ def test_only_explicit_user_values_become_preferences():
     plan = {
         "type": "control",
         "actions": [
-            {"uuid": "dev-master-light", "action": "setBrightness", "params": {"brightness": 30}, "params_source": "user"},
-            {"uuid": "dev-living-light", "action": "setBrightness", "params": {"brightness": 60}, "params_source": "preference"},
+            {
+                "uuid": "dev-master-light",
+                "action": "setBrightness",
+                "params": {"brightness": 30},
+                "params_source": "user",
+            },
+            {
+                "uuid": "dev-living-light",
+                "action": "setBrightness",
+                "params": {"brightness": 60},
+                "params_source": "preference",
+            },
             {"uuid": "dev-living-ac", "action": "turnOn"},
-            {"uuid": "dev-master-curtain", "action": "setPosition", "params": {"position": 30}, "params_source": "user"},
+            {
+                "uuid": "dev-master-curtain",
+                "action": "setPosition",
+                "params": {"position": 30},
+                "params_source": "user",
+            },
         ],
     }
     orch, _, prefs, _ = make([plan])
@@ -196,8 +211,10 @@ def test_non_control_replies_pass_through_trimmed(ptype):
 
 
 def test_written_preference_is_preloaded_into_the_next_request():
-    set30 = {"type": "control", "actions": [
-        {"uuid": "dev-master-light", "action": "setBrightness", "params": {"brightness": 30}}]}
+    set30 = {
+        "type": "control",
+        "actions": [{"uuid": "dev-master-light", "action": "setBrightness", "params": {"brightness": 30}}],
+    }
     orch, _, prefs, _ = make([{"type": "chat", "message": "hi"}, set30, {"type": "chat", "message": "ok"}])
     orch.handle(USER, "你好")  # caches the (empty) preference list
     orch.handle(USER, "把主卧灯调到30")  # writes a preference and invalidates the cache
@@ -207,7 +224,9 @@ def test_written_preference_is_preloaded_into_the_next_request():
 
 
 def test_rejections_and_raw_output_reach_the_log_text(caplog):
-    orch, *_ = make(["not json at all", {"type": "control", "actions": [{"uuid": "ghost", "action": "turnOff"}]}])
+    orch, *_ = make(
+        ["not json at all", {"type": "control", "actions": [{"uuid": "ghost", "action": "turnOff"}]}]
+    )
     with caplog.at_level("WARNING"):
         orch.handle(USER, "a")
         orch.handle(USER, "b")
@@ -221,7 +240,12 @@ def test_agent_failure_returns_fallback_instead_of_raising():
             raise TimeoutError("runtime unavailable")
 
     platform = FakePlatform()
-    orch = Orchestrator(cache=MemoryCache(), directory=platform, agent=Boom(), dispatcher=platform,
-                        preferences=FakePreferenceStore())
+    orch = Orchestrator(
+        cache=MemoryCache(),
+        directory=platform,
+        agent=Boom(),
+        dispatcher=platform,
+        preferences=FakePreferenceStore(),
+    )
     r = orch.handle(USER, "我要睡觉了")
     assert r.type == "error" and r.message == FALLBACK_REPLY and platform.dispatched == []

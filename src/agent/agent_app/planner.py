@@ -62,6 +62,7 @@ def run_plan(
     channel: str,
     status_lookup: StatusLookup,
     model: Any | None = None,
+    trace_attributes: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Return {"plan": <dict>, "usage": {...}, "tool_calls": int}."""
     whitelist = {d["uuid"] for d in devices}
@@ -70,6 +71,7 @@ def run_plan(
         system_prompt=build_system(devices),
         tools=[make_status_tool(whitelist, status_lookup)],
         callback_handler=None,
+        trace_attributes=trace_attributes or {},
     )
     prompt = build_prompt(utterance, devices, preferences, history, channel)
     result = agent(prompt, structured_output_model=PlanModel)
@@ -80,7 +82,13 @@ def run_plan(
         "plan": plan.model_dump(),
         "usage": {
             k: usage.get(k, 0)
-            for k in ("inputTokens", "outputTokens", "totalTokens", "cacheReadInputTokens", "cacheWriteInputTokens")
+            for k in (
+                "inputTokens",
+                "outputTokens",
+                "totalTokens",
+                "cacheReadInputTokens",
+                "cacheWriteInputTokens",
+            )
         },
         "tool_calls": tool_calls,
         "cycles": result.metrics.cycle_count,

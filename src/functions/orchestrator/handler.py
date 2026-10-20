@@ -42,6 +42,7 @@ _orch = Orchestrator(
     dispatcher=_platform,
     preferences=AgentCoreMemoryStore(),
     metrics=_metrics,
+    session_idle_seconds=int(os.environ.get("SESSION_IDLE_SECONDS", "900")),
 )
 _iot = boto3.client("iot-data", endpoint_url=os.environ.get("IOT_DATA_ENDPOINT"))
 
