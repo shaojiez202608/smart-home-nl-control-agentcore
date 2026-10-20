@@ -1,0 +1,17 @@
+{
+  "_comment": "Defaults for a non-production account: data stores are retained on stack deletion. Review docs/handover.md before use.",
+  "stackName": "proto-nl-handover",
+  "resourcePrefix": "proto-nl",
+  "removalPolicy": "retain",
+  "modelId": "us.amazon.nova-lite-v1:0",
+  "modelMaxTokens": 1024,
+  "topicPrefix": "smarthome",
+  "logRetentionDays": 30,
+  "memoryEventExpiryDays": 30,
+  "preferenceTtlDays": 90,
+  "acceptanceLatencyTargetMs": 1000,
+  "apiThrottle": {"rateLimit": 20, "burstLimit": 40},
+  "natGateways": 2,
+  "enableWaf": true,
+  "tags": {"Project": "proto-nl", "Purpose": "prototype"}
+}

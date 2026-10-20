@@ -1,0 +1,8 @@
+{
+  "app": ".venv/bin/python infra/app.py",
+  "watch": {"include": ["infra/**", "src/**"]},
+  "context": {
+    "@aws-cdk/aws-iam:minimizePolicies": true,
+    "@aws-cdk/core:target-partitions": ["aws"]
+  }
+}

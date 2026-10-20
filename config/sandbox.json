@@ -1,0 +1,17 @@
+{
+  "_comment": "Sandbox / test account defaults: everything is destroyable. See docs/deployment-guide.md for every field.",
+  "stackName": "proto-nl-sandbox",
+  "resourcePrefix": "proto-nl",
+  "removalPolicy": "destroy",
+  "modelId": "us.amazon.nova-lite-v1:0",
+  "modelMaxTokens": 1024,
+  "topicPrefix": "smarthome",
+  "logRetentionDays": 7,
+  "memoryEventExpiryDays": 30,
+  "preferenceTtlDays": 90,
+  "acceptanceLatencyTargetMs": 1000,
+  "apiThrottle": {"rateLimit": 20, "burstLimit": 40},
+  "natGateways": 1,
+  "enableWaf": true,
+  "tags": {"Project": "proto-nl", "Purpose": "prototype", "Teardown": "after-test"}
+}
