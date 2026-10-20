@@ -26,8 +26,13 @@ RESULTS: list[dict] = []
 INFO: dict[str, str] = {}  # diagnostics only; not counted as checks
 
 
+def _newest_value(records: list[dict]) -> str | None:
+    newest = max(records, key=lambda r: str(r.get("createdAt", ""))) if records else {}
+    return newest.get("metadata", {}).get("value", {}).get("stringValue")
+
+
 def preference_records(
-    out: dict, username: str, device: str, attribute: str, wait: float = 15.0
+    out: dict, username: str, device: str, attribute: str, wait: float = 15.0, only_one: bool = True
 ) -> list[dict]:
     """Read long-term preference records directly from AgentCore Memory (listing is eventually consistent)."""
     idp = boto3.client("cognito-idp", region_name=region())
@@ -55,7 +60,7 @@ def preference_records(
             maxResults=20,
         ).get("memoryRecordSummaries", [])
         if time.time() >= deadline or (
-            len(records) == 1 and records[0].get("metadata", {}).get("value", {}).get("stringValue") == "40"
+            _newest_value(records) == "40" and (len(records) == 1 or not only_one)
         ):
             return records
         time.sleep(1.0)
@@ -275,11 +280,10 @@ def main() -> int:
     # Explicit preferences: written to AgentCore Memory, one record per device and attribute (overwrite).
     api(out, alice, "POST", "/v1/commands", {"utterance": "把主卧灯亮度调到30"})
     api(out, alice, "POST", "/v1/commands", {"utterance": "把主卧灯亮度调到40"})
-    records = preference_records(out, "demo-alice", "dev-master-light", "brightness", wait=0)
-    newest = max(records, key=lambda r: str(r.get("createdAt", ""))) if records else {}
+    records = preference_records(out, "demo-alice", "dev-master-light", "brightness", only_one=False)
     check(
         "effective preference is the latest stated value",
-        newest.get("metadata", {}).get("value", {}).get("stringValue") == "40",
+        _newest_value(records) == "40",
         json.dumps([r.get("metadata", {}).get("value") for r in records], ensure_ascii=False),
     )
     # Listing is eventually consistent; a later write removes superseded records it can see.
