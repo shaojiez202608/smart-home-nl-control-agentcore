@@ -230,6 +230,9 @@ class NlControlStack(Stack):
             install_latest_aws_sdk=False,
             log_group=self.provider_logs,
         )
+        # Delete the custom resources before the provider's log group: the provider logs while deleting them,
+        # and Lambda would recreate a log group that is already gone (found in deployment testing).
+        iot_ep.node.add_dependency(self.provider_logs)
         iot_endpoint = "https://" + iot_ep.get_response_field("endpointAddress")
         topic_arn = f"arn:{Aws.PARTITION}:iot:{Aws.REGION}:{Aws.ACCOUNT_ID}:topic/{topic}"
 
@@ -759,6 +762,7 @@ class NlControlStack(Stack):
             log_group=self.provider_logs,
         )
         runtime_logs.node.add_dependency(runtime)
+        runtime_logs.node.add_dependency(self.provider_logs)
 
         # ------------------------------------------------------- orchestrator
         orch_fn = self._function(

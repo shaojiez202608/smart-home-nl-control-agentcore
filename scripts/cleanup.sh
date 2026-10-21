@@ -29,7 +29,8 @@ echo "== cdk destroy"
 npx -y "aws-cdk@${CDK_VERSION}" destroy -c "config=$CONFIG" "$STACK" --force 2>&1 | mask || warn "cdk destroy failed"
 
 echo "== log groups created by services outside the stack (runtime, CDK provider functions)"
-for p in "/aws/bedrock-agentcore/runtimes/$UP" "/aws/lambda/$STACK"; do
+# "$STACK" catches stack log groups that a function recreated while the stack was being deleted.
+for p in "/aws/bedrock-agentcore/runtimes/$UP" "/aws/lambda/$STACK" "$STACK"; do
   for g in $(aws logs describe-log-groups --region "$REGION" --log-group-name-prefix "$p" --query 'logGroups[].logGroupName' --output text 2>/dev/null); do
     [ "$g" = "None" ] && continue
     aws logs delete-log-group --region "$REGION" --log-group-name "$g" && echo "deleted $g" || warn "could not delete $g"
