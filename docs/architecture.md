@@ -105,7 +105,7 @@ sequenceDiagram
   Note over I,App: asynchronous, no waiting relationship with the response
   I->>I: device reports state
   I->>P: state sync updates platform state, cache, receipt
-  I-->>App: users/{id}/events
+  I-->>App: members/{id}/events
 ```
 
 Design choices on this path:

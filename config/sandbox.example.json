@@ -1,5 +1,5 @@
 {
-  "_comment": "Sandbox / test account defaults: everything is destroyable. See docs/deployment-guide.md for every field.",
+  "_comment": "Template: `make init` copies it to config/sandbox.json (git-ignored). Sandbox defaults: everything is destroyable. Fields: docs/deployment-guide.md.",
   "stackName": "proto-nl-sandbox",
   "resourcePrefix": "proto-nl",
   "removalPolicy": "destroy",

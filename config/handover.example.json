@@ -1,5 +1,5 @@
 {
-  "_comment": "Defaults for a non-production account: data stores are retained on stack deletion. Review docs/handover.md before use.",
+  "_comment": "Template: `make init` copies it to config/handover.json (git-ignored). Non-production handover defaults: data stores are retained on stack deletion. Review docs/handover.md first.",
   "stackName": "proto-nl-handover",
   "resourcePrefix": "proto-nl",
   "removalPolicy": "retain",

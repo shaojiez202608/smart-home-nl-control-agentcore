@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""CDK entrypoint.
+"""CDK entrypoint. Deploy with `make deploy` (see README.md); synth with `make synth`.
 
-npx aws-cdk@latest deploy -c config=config/sandbox.json
+The stack is account-agnostic: no account id is read from the environment or written to cdk.json,
+so `cdk synth` works without AWS credentials (CI) and no context lookups are cached.
 """
 
 from __future__ import annotations
@@ -22,6 +23,8 @@ from smarthome_infra.stack import NlControlStack  # noqa: E402
 
 app = cdk.App()
 config_path = Path(app.node.try_get_context("config") or "config/sandbox.json")
+if not config_path.exists():
+    raise SystemExit(f"{config_path} not found: run `make init` (copies config/*.example.json)")
 config = validate(json.loads(config_path.read_text(encoding="utf-8")))
 
 layer_dir = build_layer()
@@ -34,8 +37,7 @@ stack = NlControlStack(
     layer_dir=layer_dir,
     agent_dir=agent_dir,
     env=cdk.Environment(
-        account=os.environ.get("CDK_DEFAULT_ACCOUNT"),
-        region=os.environ.get("CDK_DEFAULT_REGION") or os.environ.get("AWS_REGION") or "us-east-1",
+        region=os.environ.get("AWS_REGION") or os.environ.get("CDK_DEFAULT_REGION") or "us-east-1"
     ),
     description="Natural-language smart home control prototype (not for production)",
 )

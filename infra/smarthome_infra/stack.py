@@ -7,7 +7,7 @@ Layout (one stack keeps deploy and destroy atomic):
 * Platform      - simulated existing platform: REST API (API key) + Lambda,
                   virtual devices and state sync on AWS IoT Core rules
 * Identity      - Amazon Cognito user pool (app users) and M2M client
-* AgentCore     - Runtime (container), Memory, Gateway + OpenAPI target,
+* AgentCore     - Runtime (direct code deployment), Memory, Gateway + OpenAPI target,
                   API-key and OAuth2 credential providers
 * Ingress       - app-facing REST API (Cognito authorizer) -> orchestrator
 * Observability - dashboard and latency alarm
@@ -22,6 +22,7 @@ from aws_cdk import (
     Aws,
     CfnOutput,
     Duration,
+    Fn,
     RemovalPolicy,
     Stack,
 )
@@ -45,8 +46,10 @@ from constructs import Construct
 
 from .nag import apply_suppressions
 from .openapi import platform_openapi
+from .stack_prefixes import base_model_id
 
 ROOT = Path(__file__).resolve().parents[2]
+
 
 _RETENTION = {
     1: logs.RetentionDays.ONE_DAY,
@@ -77,6 +80,8 @@ class NlControlStack(Stack):
 
         # ------------------------------------------------------------ network
         flow_logs = self._log_group("VpcFlowLogs")
+        # The stack is account-agnostic at synth time (infra/app.py passes no account), so the two AZs
+        # come from Fn::GetAZs at deploy time and synth needs no AWS credentials or context lookups.
         vpc = ec2.Vpc(
             self,
             "Vpc",
@@ -90,7 +95,25 @@ class NlControlStack(Stack):
                 ),
             ],
         )
-        vpc.add_flow_log("FlowLog", destination=ec2.FlowLogDestination.to_cloud_watch_logs(flow_logs))
+        # Own role instead of the CDK default, so the trust policy can carry the confused-deputy
+        # conditions the flow-logs service supports (SECURITY-NOTES.md, trust policies).
+        flow_log_role = iam.Role(
+            self,
+            "FlowLogRole",
+            assumed_by=iam.ServicePrincipal(
+                "vpc-flow-logs.amazonaws.com",
+                conditions={
+                    "StringEquals": {"aws:SourceAccount": Aws.ACCOUNT_ID},
+                    "ArnLike": {
+                        "aws:SourceArn": f"arn:{Aws.PARTITION}:ec2:{Aws.REGION}:{Aws.ACCOUNT_ID}:vpc-flow-log/*"
+                    },
+                },
+            ),
+        )
+        flow_logs.grant_write(flow_log_role)
+        vpc.add_flow_log(
+            "FlowLog", destination=ec2.FlowLogDestination.to_cloud_watch_logs(flow_logs, flow_log_role)
+        )
         vpc.add_gateway_endpoint("DynamoDbEndpoint", service=ec2.GatewayVpcEndpointAwsService.DYNAMODB)
         private = ec2.SubnetSelection(subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS)
 
@@ -239,7 +262,7 @@ class NlControlStack(Stack):
         def path_params(*names: str) -> dict[str, bool]:
             return {f"method.request.path.{n}": True for n in names}
 
-        users = platform_api.root.add_resource("users").add_resource("{userId}")
+        users = platform_api.root.add_resource("members").add_resource("{userId}")
         users.add_resource("devices").add_method(
             "GET", integ, request_validator=pv, request_parameters=path_params("userId")
         )
@@ -300,6 +323,7 @@ class NlControlStack(Stack):
                 "COMMANDS_TABLE": commands_t.table_name,
                 "TOPIC_PREFIX": topic,
                 "IOT_DATA_ENDPOINT": iot_endpoint,
+                "METRICS_NAMESPACE": "SmartHomeNL",
                 **self._cache_env(cache, cache_user),
             },
             vpc=vpc,
@@ -310,11 +334,24 @@ class NlControlStack(Stack):
         devices_t.grant_read_write_data(state_fn)
         members_t.grant_read_data(state_fn)
         commands_t.grant_read_write_data(state_fn)
-        publish(state_fn, "users/*/events")
+        publish(state_fn, "members/*/events")
         self._grant_cache(state_fn, cache, cache_user)
 
         rule_errors = self._log_group("IotRuleErrors")
-        rule_role = iam.Role(self, "IotRuleErrorRole", assumed_by=iam.ServicePrincipal("iot.amazonaws.com"))
+        rule_role = iam.Role(
+            self,
+            "IotRuleErrorRole",
+            assumed_by=iam.ServicePrincipal(
+                "iot.amazonaws.com",
+                conditions={
+                    "StringEquals": {"aws:SourceAccount": Aws.ACCOUNT_ID},
+                    # Only this stack's topic rules (all named <prefix_>_...).
+                    "ArnLike": {
+                        "aws:SourceArn": f"arn:{Aws.PARTITION}:iot:{Aws.REGION}:{Aws.ACCOUNT_ID}:rule/{p_}_*"
+                    },
+                },
+            ),
+        )
         rule_errors.grant_write(rule_role)
         self._iot_rule(
             f"{p_}_device_cmd",
@@ -348,8 +385,11 @@ class NlControlStack(Stack):
             account_recovery=cognito.AccountRecovery.NONE,
             removal_policy=RemovalPolicy.DESTROY,
         )
+        # Globally unique, but without the account id: the first block of the stack's UUID.
+        stack_uuid_head = Fn.select(0, Fn.split("-", Fn.select(2, Fn.split("/", Aws.STACK_ID))))
         domain = pool.add_domain(
-            "Domain", cognito_domain=cognito.CognitoDomainOptions(domain_prefix=f"{p}-{Aws.ACCOUNT_ID}")
+            "Domain",
+            cognito_domain=cognito.CognitoDomainOptions(domain_prefix=Fn.join("-", [p, stack_uuid_head])),
         )
         rs = pool.add_resource_server(
             "GatewayResourceServer",
@@ -434,9 +474,16 @@ class NlControlStack(Stack):
         )
 
         ac_arn = f"arn:{Aws.PARTITION}:bedrock-agentcore:{Aws.REGION}:{Aws.ACCOUNT_ID}"
-        identity_resources = [
-            f"{ac_arn}:workload-identity-directory/default",
-            f"{ac_arn}:workload-identity-directory/default/workload-identity/*",
+        directory = f"{ac_arn}:workload-identity-directory/default"
+        # AgentCore names the workload identity after the runtime / gateway (service-generated suffix).
+        runtime_identity = [
+            directory,
+            f"{directory}/workload-identity/{p_}_agent*",
+            f"{ac_arn}:token-vault/default",
+        ]
+        gateway_identity = [
+            directory,
+            f"{directory}/workload-identity/{p}-gateway*",
             f"{ac_arn}:token-vault/default",
         ]
 
@@ -455,7 +502,7 @@ class NlControlStack(Stack):
         gateway_role.add_to_policy(
             iam.PolicyStatement(
                 actions=["bedrock-agentcore:GetWorkloadAccessToken", "bedrock-agentcore:GetResourceApiKey"],
-                resources=[*identity_resources, api_key_provider.attr_credential_provider_arn],
+                resources=[*gateway_identity, api_key_provider.attr_credential_provider_arn],
             )
         )
         api_key_secret.grant_read(gateway_role)
@@ -560,16 +607,13 @@ class NlControlStack(Stack):
                 "bedrock-agentcore.amazonaws.com",
                 conditions={
                     "StringEquals": {"aws:SourceAccount": Aws.ACCOUNT_ID},
-                    "ArnLike": {"aws:SourceArn": f"{ac_arn}:*"},
+                    # Only this stack's runtime (AgentCore appends a suffix to the runtime name).
+                    "ArnLike": {"aws:SourceArn": f"{ac_arn}:runtime/{p_}_agent*"},
                 },
             ),
         )
         model_id = c["modelId"]
-        base_model = (
-            model_id.split(".", 1)[1]
-            if model_id.split(".")[0] in ("us", "eu", "apac", "global")
-            else model_id
-        )
+        base_model = base_model_id(model_id)
         runtime_policy = iam.Policy(
             self,
             "RuntimePolicy",
@@ -599,7 +643,7 @@ class NlControlStack(Stack):
                 # scoped to the one OAuth2 provider.
                 iam.PolicyStatement(
                     actions=["bedrock-agentcore:GetResourceOauth2Token"],
-                    resources=[*identity_resources, oauth_provider.attr_credential_provider_arn],
+                    resources=[*runtime_identity, oauth_provider.attr_credential_provider_arn],
                 ),
                 iam.PolicyStatement(
                     actions=[
@@ -630,7 +674,8 @@ class NlControlStack(Stack):
             ],
         )
         runtime_role.attach_inline_policy(runtime_policy)
-        m2m_secret.grant_read(runtime_role)
+        # No GetSecretValue on the M2M secret for the runtime: AgentCore Identity reads the client secret
+        # for the token vault; verified by the end-to-end status-query check (DEPLOYMENT-LOG.md).
 
         runtime = agentcore.CfnRuntime(
             self,
@@ -697,10 +742,8 @@ class NlControlStack(Stack):
         api_key_secret.grant_read(orch_fn)
         self._grant_cache(orch_fn, cache, cache_user)
         publish(orch_fn, "speakers/*/reply")
-        invoke_actions = [
-            "bedrock-agentcore:InvokeAgentRuntime",
-            "bedrock-agentcore:InvokeAgentRuntimeForUser",
-        ]
+        # No InvokeAgentRuntimeForUser: the orchestrator does not assert a runtime user id (D25).
+        invoke_actions = ["bedrock-agentcore:InvokeAgentRuntime"]
         orch_fn.add_to_role_policy(
             iam.PolicyStatement(
                 actions=invoke_actions,
@@ -847,7 +890,7 @@ class NlControlStack(Stack):
         for k, v in out.items():
             CfnOutput(self, f"Out{k}", key=k, value=v)
 
-        apply_suppressions(self, base_model, p)
+        apply_suppressions(self, c, base_model)
 
     # ---------------------------------------------------------------- helpers
 

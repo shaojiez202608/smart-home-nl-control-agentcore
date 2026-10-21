@@ -24,3 +24,10 @@ cdk.context.json
 # Archives (also keeps security scanners from flagging packaged deps)
 *.zip
 *.tar.gz
+
+# Real parameter files are local; the *.example.json templates are committed (make init copies them)
+config/*.json
+!config/*.example.json
+
+# Asset manifests of what was actually deployed (used by cleanup)
+.deploy/
