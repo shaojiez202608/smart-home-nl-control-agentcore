@@ -348,8 +348,15 @@ def main() -> int:
         _newest_value(records) == "40",
         json.dumps([r.get("metadata", {}).get("value") for r in records], ensure_ascii=False),
     )
-    # Listing is eventually consistent; a later write removes superseded records it can see.
-    time.sleep(10)
+    # Listing is eventually consistent; a later write removes superseded records it can see. Wait until the
+    # listing shows both earlier records (in testing this took longer than 10 s), then write again.
+    deadline = time.time() + 120
+    while time.time() < deadline:
+        seen = preference_records(out, "demo-alice", "dev-master-light", "brightness", wait=0, only_one=False)
+        if {"30", "40"} <= {r.get("metadata", {}).get("value", {}).get("stringValue") for r in seen}:
+            break
+        time.sleep(5)
+    INFO["listing_caught_up_after_s"] = str(round(120 - (deadline - time.time())))
     api(out, alice, "POST", "/v1/commands", {"utterance": "把主卧灯亮度调到40"})
     records = preference_records(out, "demo-alice", "dev-master-light", "brightness")
     check(

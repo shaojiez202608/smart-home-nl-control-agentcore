@@ -678,8 +678,9 @@ class NlControlStack(Stack):
             ],
         )
         runtime_role.attach_inline_policy(runtime_policy)
-        # No GetSecretValue on the M2M secret for the runtime: AgentCore Identity reads the client secret
-        # for the token vault; verified by the end-to-end status-query check (DEPLOYMENT-LOG.md).
+        # GetResourceOauth2Token reads the EXTERNAL client secret with the caller's permissions: without
+        # GetSecretValue here the token request fails with AccessDenied (found in deployment testing).
+        m2m_secret.grant_read(runtime_role)
 
         runtime = agentcore.CfnRuntime(
             self,
