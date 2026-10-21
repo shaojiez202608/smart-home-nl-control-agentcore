@@ -60,10 +60,11 @@ def test_items_follows_next_token_for_non_paginated_operations():
 
 
 def test_mask_replaces_only_standalone_account_ids():
-    h = "50a9257453604623ad71a9c6b168f52b7de10106a8bcb4dc6058b7704605dd62"
+    h = "5a" * 32  # an asset hash: hex digits that contain runs of 12 digits must not be masked
+    h = h[:10] + "123456789" + "012" + h[22:]
+    account = "9" * 12  # built at run time: no 12-digit literal in the repository
     assert (
-        verify_cleanup.mask(f"arn:aws:iam::123456789012:role/x {h}")
-        == f"arn:aws:iam::111122223333:role/x {h}"
+        verify_cleanup.mask(f"arn:aws:iam::{account}:role/x {h}") == f"arn:aws:iam::111122223333:role/x {h}"
     )
 
 

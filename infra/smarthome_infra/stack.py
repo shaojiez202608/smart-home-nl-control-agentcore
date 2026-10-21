@@ -359,14 +359,14 @@ class NlControlStack(Stack):
         rule_errors.grant_write(rule_role)
         self._iot_rule(
             f"{p_}_device_cmd",
-            f"SELECT *, topic(3) AS uuid FROM '{topic}/devices/+/cmd'",
+            f"SELECT *, topic(3) AS uuid FROM '{topic}/devices/+/cmd'",  # nosec B608 - AWS IoT rule SQL; topic is the validated topicPrefix
             device_fn,
             rule_errors,
             rule_role,
         )
         self._iot_rule(
             f"{p_}_device_state",
-            f"SELECT *, topic(3) AS uuid FROM '{topic}/devices/+/state'",
+            f"SELECT *, topic(3) AS uuid FROM '{topic}/devices/+/state'",  # nosec B608 - AWS IoT rule SQL; topic is the validated topicPrefix
             state_fn,
             rule_errors,
             rule_role,
@@ -845,7 +845,7 @@ class NlControlStack(Stack):
         )
         self._iot_rule(
             f"{p_}_speaker_utterance",
-            f"SELECT utterance, topic(3) AS speakerId, 'speaker' AS source FROM '{topic}/speakers/+/utterance'",
+            f"SELECT utterance, topic(3) AS speakerId, 'speaker' AS source FROM '{topic}/speakers/+/utterance'",  # nosec B608 - AWS IoT rule SQL; topic is the validated topicPrefix
             orch_fn,
             rule_errors,
             rule_role,

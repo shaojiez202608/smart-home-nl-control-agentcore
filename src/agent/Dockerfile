@@ -16,4 +16,6 @@ RUN useradd --create-home --uid 1000 agent
 USER agent
 
 EXPOSE 8080
+# AgentCore Runtime service contract: GET /ping on port 8080.
+HEALTHCHECK --interval=30s --timeout=3s CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/ping', timeout=2)"]
 CMD ["opentelemetry-instrument", "python", "-m", "agent_app.main"]
