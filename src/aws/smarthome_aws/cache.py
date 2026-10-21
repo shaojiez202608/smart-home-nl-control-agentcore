@@ -98,6 +98,9 @@ class ValkeyCache:
     def set_json(self, key: str, value: Any, ttl_seconds: int) -> None:
         self.r.set(key, json.dumps(value, ensure_ascii=False), ex=ttl_seconds)
 
+    def add_json(self, key: str, value: Any, ttl_seconds: int) -> bool:
+        return bool(self.r.set(key, json.dumps(value, ensure_ascii=False), ex=ttl_seconds, nx=True))
+
     def pop_json(self, key: str) -> Any | None:
         v = self.r.getdel(key)
         return json.loads(v) if v is not None else None

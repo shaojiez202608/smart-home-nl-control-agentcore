@@ -23,6 +23,10 @@ def _api_key() -> str:
     return json.loads(secret)["apiKey"]
 
 
+class PlatformError(RuntimeError):
+    """The platform API did not return a usable answer (the orchestrator answers with the fallback)."""
+
+
 class PlatformClient:
     def __init__(self, base_url: str | None = None):
         self.base = (base_url or os.environ["PLATFORM_API_URL"]).rstrip("/")
@@ -34,14 +38,18 @@ class PlatformClient:
             body=json.dumps(body).encode() if body is not None else None,
             headers={"x-api-key": _api_key(), "content-type": "application/json"},
         )
-        data = json.loads(resp.data or b"{}")
-        return resp.status, data
+        try:
+            data = json.loads(resp.data or b"{}")
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            # e.g. an HTML error page from a proxy: treat as a failed call, not as an exception
+            return (resp.status if resp.status >= 400 else 502), {"error": "non-JSON response"}
+        return resp.status, data if isinstance(data, dict) else {"error": "unexpected response"}
 
     # DeviceDirectory
     def list_user_devices(self, user_id: str) -> list[Device]:
         status, data = self._req("GET", f"/members/{quote(user_id)}/devices")
-        if status != 200:
-            raise RuntimeError(f"platform list devices failed: {status}")
+        if status != 200 or not isinstance(data.get("devices"), list):
+            raise PlatformError(f"platform list devices failed: {status}")
         return [Device.from_dict(d) for d in data["devices"]]
 
     # CommandDispatcher

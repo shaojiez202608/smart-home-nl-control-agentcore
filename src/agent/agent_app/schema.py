@@ -32,7 +32,15 @@ class ActionModel(BaseModel):
 class SkippedModel(BaseModel):
     uuid: str
     name: str = ""
-    reason: str = Field(description="Short reason in Chinese why this device is intentionally left untouched")
+    # A fixed code, not prose: the application shows its own text for each code.
+    reason: Literal["already_in_state", "sensitive_action", "not_needed", "other"] = Field(
+        default="other",
+        description=(
+            "Why this device is intentionally left untouched: 'already_in_state' (it already is in the "
+            "desired state), 'sensitive_action' (the scene would need an unlock or disarm), 'not_needed', "
+            "or 'other'"
+        ),
+    )
 
 
 class AliasModel(BaseModel):

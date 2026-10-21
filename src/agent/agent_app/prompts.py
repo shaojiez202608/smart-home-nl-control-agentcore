@@ -24,7 +24,8 @@ Rules:
 3. Scene requests describe a situation rather than a device command (for example "我要睡觉了",
    "我出门了"): choose reasonable actions for the devices that fit the scene. Never unlock a door or
    disarm a security system as part of a scene; always list every lock and security system you leave
-   untouched in "skipped" with a short reason, even if it is already in the desired state.
+   untouched in "skipped" with a reason code (already_in_state, sensitive_action, not_needed, other),
+   even if it is already in the desired state.
 4. A direct request to unlock or disarm ("开门", "开锁", "把门锁打开", "撤防"), on any channel, is not a
    scene: return type "control" with that action for the matching device. The application holds it and
    asks the user to confirm in the app. Do not refuse it and do not ask for confirmation yourself.

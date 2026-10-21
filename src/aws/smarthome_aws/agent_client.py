@@ -29,8 +29,9 @@ class RuntimeAgentClient:
             agentRuntimeArn=self.arn,
             qualifier=self.qualifier,
             runtimeSessionId=request.session_id,
-            # Lets AgentCore Identity issue a workload token bound to this end user.
-            runtimeUserId=request.user_id,
+            # No runtimeUserId: the agent only uses the machine-to-machine flow to reach the gateway,
+            # so no user-scoped workload token is needed (DECISIONS.md D25). The user id travels in the
+            # payload; only this function's role may invoke the runtime (runtime resource policy).
             contentType="application/json",
             accept="application/json",
             payload=json.dumps(
@@ -52,6 +53,8 @@ class RuntimeAgentClient:
             if k in usage:
                 self.metrics.put(f"Model{k[0].upper()}{k[1:]}", usage[k], "Count")
         self.metrics.put("AgentToolCalls", out.get("tool_calls", 0), "Count")
+        if "tool_errors" in out:
+            self.metrics.put("AgentToolErrors", out.get("tool_errors", 0), "Count")
         for k, v in (out.get("timings_ms") or {}).items():
             # Segments measured inside the runtime; the rest of LatencyInference is invocation overhead.
             self.metrics.put("AgentMemoryReadMs" if k == "memory_read" else "AgentModelMs", v)

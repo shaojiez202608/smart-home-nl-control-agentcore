@@ -1,13 +1,15 @@
 """AgentCore Runtime entrypoint.
 
-Payload (from the orchestrator Lambda):
-    {"user_id", "session_id", "utterance", "channel", "devices": [...]}
+Payload (from the orchestrator Lambda, the only principal the runtime resource
+policy allows):
+    {"user_id", "session_id", "utterance", "channel", "devices": [...], "preferences": [...]}
 
-The device context arrives preloaded, so the common control path needs a
-single model call. The agent reads remembered preferences and recent turns
-from AgentCore Memory, and reaches the existing platform API only through
-AgentCore Gateway, authenticating with an M2M token obtained from AgentCore
-Identity.
+The device context and the remembered preferences arrive preloaded, so the
+common control path needs a single model call. AgentCore Memory is read only
+for what the payload does not carry (recent turns when the session's microVM
+is new; preferences if a caller omits them). The agent reaches the existing
+platform API only through AgentCore Gateway, authenticating with an M2M token
+obtained from AgentCore Identity.
 """
 
 from __future__ import annotations
@@ -61,11 +63,18 @@ def read_preferences(user_id: str) -> list[str]:
     if not MEMORY_ID:
         return []
     try:
-        resp = _memory().list_memory_records(
-            memoryId=MEMORY_ID, namespace=preferences_namespace(user_id), maxResults=100
-        )
+        client, summaries, token = _memory(), [], None
+        for _ in range(20):
+            args = {"memoryId": MEMORY_ID, "namespace": preferences_namespace(user_id), "maxResults": 100}
+            if token:
+                args["nextToken"] = token
+            resp = client.list_memory_records(**args)
+            summaries += resp.get("memoryRecordSummaries", [])
+            token = resp.get("nextToken")
+            if not token:
+                break
         newest: dict[tuple[str, str], dict] = {}
-        for r in resp.get("memoryRecordSummaries", []):
+        for r in summaries:
             md = r.get("metadata") or {}
             key = tuple((md.get(k) or {}).get("stringValue", "") for k in ("deviceUuid", "attribute"))
             if key not in newest or str(r.get("createdAt", "")) > str(newest[key].get("createdAt", "")):
@@ -151,28 +160,11 @@ def gateway_status_lookup(user_id: str):
     return lookup
 
 
-RUNTIME_USER_HEADER = "x-amzn-bedrock-agentcore-runtime-user-id"
-
-
-def _runtime_user_id() -> str | None:
-    """User id set by the caller through runtimeUserId, if the runtime exposes it to the container."""
-    try:
-        from bedrock_agentcore.runtime import BedrockAgentCoreContext
-
-        headers = BedrockAgentCoreContext.get_request_headers() or {}
-    except Exception:
-        return None
-    return next((v for k, v in headers.items() if k.lower() == RUNTIME_USER_HEADER), None)
-
-
 @app.entrypoint
 def invoke(payload: dict[str, Any], context: Any = None) -> dict[str, Any]:
+    # The user id is the orchestrator's verified Cognito sub (or a speaker's registered owner);
+    # no other principal can invoke this runtime (resource policy, see DECISIONS.md D25).
     user_id = str(payload["user_id"])
-    asserted = _runtime_user_id()
-    if asserted is not None and asserted != user_id:
-        # The payload must describe the same user the caller asserted to AgentCore Identity.
-        log.warning(json.dumps({"event": "user_mismatch"}))
-        raise PermissionError("user identity mismatch")
     session_id = str(payload.get("session_id") or getattr(context, "session_id", "") or "default-session")
     utterance = str(payload.get("utterance", ""))[:500]
     t0 = time.perf_counter()

@@ -25,6 +25,9 @@ agent = [
   "strands-agents>=1.61",
   "bedrock-agentcore>=1.24",
   "pydantic>=2.8",
+  # GHSA-84m7-p3x7-pcfv (High) is fixed in mcp 1.30.0 (1.x) and 2.2.0 (2.x). strands-agents 1.61.1 requires
+  # mcp<2.2, so the fixed 1.x line is the only fixed version inside its declared range.
+  "mcp>=1.30.0,<2.0",
 ]
 
 [tool.uv]
@@ -32,7 +35,7 @@ package = false
 default-groups = ["dev", "infra", "agent"]
 
 [tool.pytest.ini_options]
-pythonpath = ["src/core", "src/agent", "src/functions", ".", "scripts"]
+pythonpath = ["src/core", "src/aws", "src/agent", "src/functions", ".", "scripts"]
 testpaths = ["tests"]
 addopts = "-q"
 

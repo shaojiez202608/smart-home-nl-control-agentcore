@@ -9,7 +9,8 @@ superseded record behind. Two rules keep the behaviour correct anyway:
 
 * reads keep only the newest record per (device, attribute);
 * every write deletes all superseded records it can see, so leftovers are
-  removed by a later write.
+  removed by a later write. The new record is created before the old ones are
+  deleted, so a failed create never loses the previous preference.
 """
 
 from __future__ import annotations
@@ -26,6 +27,9 @@ from smarthome_core.memory_policy import PREFERENCE_TTL_DAYS, PreferenceRecord
 log = logging.getLogger(__name__)
 
 
+MAX_PAGES = 20
+
+
 class MemoryWriteError(RuntimeError):
     """AgentCore Memory rejected a record in a batch call."""
 
@@ -40,19 +44,43 @@ class AgentCoreMemoryStore:
         self.ttl_days = int(os.environ.get("PREFERENCE_TTL_DAYS", str(PREFERENCE_TTL_DAYS)))
         self.client = boto3.client("bedrock-agentcore")
 
+    def _list(self, namespace: str, **kw) -> list[dict]:
+        """All record summaries in a namespace (follows nextToken)."""
+        out: list[dict] = []
+        token = None
+        for _ in range(MAX_PAGES):
+            args = {"memoryId": self.memory_id, "namespace": namespace, "maxResults": 100, **kw}
+            if token:
+                args["nextToken"] = token
+            resp = self.client.list_memory_records(**args)
+            out += resp.get("memoryRecordSummaries", [])
+            token = resp.get("nextToken")
+            if not token:
+                break
+        return out
+
+    def list_records(self, user_id: str) -> list[PreferenceRecord]:
+        return [
+            PreferenceRecord(
+                device_uuid=_meta(r, "deviceUuid"),
+                attribute=_meta(r, "attribute"),
+                value=_meta(r, "value"),
+                text=r["content"]["text"],
+                created_at=_iso(r.get("createdAt")),
+            )
+            for r in newest_per_key(self._list(preferences_namespace(user_id)))
+            if _meta(r, "deviceUuid") and _meta(r, "attribute")
+        ]
+
     def list_texts(self, user_id: str) -> list[str]:
-        resp = self.client.list_memory_records(
-            memoryId=self.memory_id, namespace=preferences_namespace(user_id), maxResults=100
-        )
-        return [r["content"]["text"] for r in newest_per_key(resp.get("memoryRecordSummaries", []))]
+        return [r.text for r in self.list_records(user_id)]
 
     def upsert(self, user_id: str, records: list[PreferenceRecord]) -> None:
+        """Create the new record first, then delete the superseded ones (a failed create keeps the old)."""
         ns = preferences_namespace(user_id)
         for rec in records:
-            existing = self.client.list_memory_records(
-                memoryId=self.memory_id,
-                namespace=ns,
-                maxResults=20,
+            existing = self._list(
+                ns,
                 metadataFilters=[
                     {
                         "left": {"metadataKey": "deviceUuid"},
@@ -65,15 +93,7 @@ class AgentCoreMemoryStore:
                         "right": {"metadataValue": {"stringValue": rec.attribute}},
                     },
                 ],
-            ).get("memoryRecordSummaries", [])
-            if existing:
-                deleted = self.client.batch_delete_memory_records(
-                    memoryId=self.memory_id,
-                    records=[{"memoryRecordId": r["memoryRecordId"], "namespace": ns} for r in existing],
-                )
-                # A failed delete only leaves a superseded record behind (reads keep the newest).
-                if deleted.get("failedRecords"):
-                    log.warning("memory_delete_partial %s", json.dumps(deleted["failedRecords"], default=str))
+            )
             created = self.client.batch_create_memory_records(
                 memoryId=self.memory_id,
                 records=[
@@ -95,6 +115,20 @@ class AgentCoreMemoryStore:
             # Batch APIs report per-record failures in the response body, not as exceptions.
             if created.get("failedRecords"):
                 raise MemoryWriteError(json.dumps(created["failedRecords"], default=str))
+            if existing:
+                deleted = self.client.batch_delete_memory_records(
+                    memoryId=self.memory_id,
+                    records=[{"memoryRecordId": r["memoryRecordId"], "namespace": ns} for r in existing],
+                )
+                # A failed delete only leaves a superseded record behind (reads keep the newest).
+                if deleted.get("failedRecords"):
+                    log.warning("memory_delete_partial %s", json.dumps(deleted["failedRecords"], default=str))
+
+
+def _iso(value) -> str:
+    if isinstance(value, datetime):
+        return value.isoformat()
+    return str(value or "")
 
 
 def _meta(record: dict, key: str) -> str:

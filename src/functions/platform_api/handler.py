@@ -111,6 +111,7 @@ def send_command(device_uuid: str, body: dict) -> dict:
             "requestId": str(body.get("requestId", "")),
             "status": "accepted",
             "acceptedAt": now,
+            "acceptedAtMs": int(time.time() * 1000),
             "expiresAt": now + RECEIPT_TTL_SECONDS,
         }
     )

@@ -34,7 +34,9 @@ def _model() -> BedrockModel:
     )
 
 
-def make_status_tool(whitelist: set[str], lookup: StatusLookup):
+def make_status_tool(whitelist: set[str], lookup: StatusLookup, stats: dict[str, int] | None = None):
+    stats = stats if stats is not None else {}
+
     @tool
     def query_device_status(uuid: str) -> str:
         """Fetch the real-time status of one device. Only use for explicit real-time status questions.
@@ -43,10 +45,12 @@ def make_status_tool(whitelist: set[str], lookup: StatusLookup):
             uuid: uuid of a device from the device list
         """
         if uuid not in whitelist:
+            stats["errors"] = stats.get("errors", 0) + 1
             return json.dumps({"error": "unknown device"})
         try:
             return json.dumps(lookup(uuid), ensure_ascii=False)
         except Exception as exc:  # surface a readable failure to the model
+            stats["errors"] = stats.get("errors", 0) + 1
             log.warning("status_lookup_failed", extra={"uuid": uuid, "error": str(exc)})
             return json.dumps({"error": "status unavailable"})
 
@@ -66,10 +70,11 @@ def run_plan(
 ) -> dict[str, Any]:
     """Return {"plan": <dict>, "usage": {...}, "tool_calls": int}."""
     whitelist = {d["uuid"] for d in devices}
+    stats: dict[str, int] = {}
     agent = Agent(
         model=model or _model(),
         system_prompt=build_system(devices),
-        tools=[make_status_tool(whitelist, status_lookup)],
+        tools=[make_status_tool(whitelist, status_lookup, stats)],
         callback_handler=None,
         trace_attributes=trace_attributes or {},
     )
@@ -78,6 +83,10 @@ def run_plan(
     plan: PlanModel = result.structured_output
     usage = dict(result.metrics.accumulated_usage or {})
     tool_calls = sum(m.call_count for m in result.metrics.tool_metrics.values())
+    # Tool failures: exceptions seen by Strands plus lookups the tool answered with an error.
+    tool_errors = stats.get("errors", 0) + sum(
+        getattr(m, "error_count", 0) for m in result.metrics.tool_metrics.values()
+    )
     return {
         "plan": plan.model_dump(),
         "usage": {
@@ -91,5 +100,6 @@ def run_plan(
             )
         },
         "tool_calls": tool_calls,
+        "tool_errors": tool_errors,
         "cycles": result.metrics.cycle_count,
     }
