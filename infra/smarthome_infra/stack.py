@@ -785,8 +785,12 @@ class NlControlStack(Stack):
         api_key_secret.grant_read(orch_fn)
         self._grant_cache(orch_fn, cache, cache_user)
         publish(orch_fn, "speakers/*/reply")
-        # No InvokeAgentRuntimeForUser: the orchestrator does not assert a runtime user id (D25).
-        invoke_actions = ["bedrock-agentcore:InvokeAgentRuntime"]
+        # InvokeAgentRuntimeForUser: the orchestrator passes the verified user id as runtimeUserId, which the
+        # runtime needs to hand the agent a workload access token (D25). Only this role may do either.
+        invoke_actions = [
+            "bedrock-agentcore:InvokeAgentRuntime",
+            "bedrock-agentcore:InvokeAgentRuntimeForUser",
+        ]
         orch_fn.add_to_role_policy(
             iam.PolicyStatement(
                 actions=invoke_actions,

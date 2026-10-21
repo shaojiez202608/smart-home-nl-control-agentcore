@@ -36,8 +36,16 @@ def _newest_value(records: list[dict]) -> str | None:
     return newest.get("metadata", {}).get("value", {}).get("stringValue")
 
 
+def _exists(mem, memory_id: str, record_id: str) -> bool:
+    try:
+        mem.get_memory_record(memoryId=memory_id, memoryRecordId=record_id)
+        return True
+    except mem.exceptions.ResourceNotFoundException:
+        return False
+
+
 def preference_records(
-    out: dict, username: str, device: str, attribute: str, wait: float = 15.0, only_one: bool = True
+    out: dict, username: str, device: str, attribute: str, wait: float = 60.0, only_one: bool = True
 ) -> list[dict]:
     """Read long-term preference records directly from AgentCore Memory (listing is eventually consistent)."""
     idp = boto3.client("cognito-idp", region_name=region())
@@ -71,6 +79,9 @@ def preference_records(
                 for f in flt
             )
         ]
+        if only_one and len(records) > 1:
+            # Listing lags behind deletes too: confirm each listed record still exists.
+            records = [r for r in records if _exists(mem, out["MemoryId"], r["memoryRecordId"])]
         if time.time() >= deadline or (
             _newest_value(records) == "40" and (len(records) == 1 or not only_one)
         ):

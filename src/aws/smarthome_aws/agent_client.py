@@ -29,9 +29,12 @@ class RuntimeAgentClient:
             agentRuntimeArn=self.arn,
             qualifier=self.qualifier,
             runtimeSessionId=request.session_id,
-            # No runtimeUserId: the agent only uses the machine-to-machine flow to reach the gateway,
-            # so no user-scoped workload token is needed (DECISIONS.md D25). The user id travels in the
-            # payload; only this function's role may invoke the runtime (runtime resource policy).
+            # Required for SigV4 callers: without a runtime user id the runtime hands the container no
+            # workload access token, and the agent cannot obtain its M2M token for the gateway from
+            # AgentCore Identity (found in deployment testing, DECISIONS.md D25). The value is the verified
+            # Cognito sub or the speaker's registered owner; only this function's role may invoke the runtime
+            # and pass a user id (runtime resource policy).
+            runtimeUserId=request.user_id,
             contentType="application/json",
             accept="application/json",
             payload=json.dumps(
