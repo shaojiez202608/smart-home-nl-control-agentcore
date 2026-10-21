@@ -1,5 +1,8 @@
 # Architecture
 
+Describes the code at tag `v0.1.0` (the deployment check in DEPLOYMENT-LOG.md ran on the commit recorded
+there). The mermaid sources in this file are the source of truth for the diagrams in the READMEs.
+
 ## Goal and constraints
 
 Add a "natural language -> structured plan -> validation -> dispatch" path to a smart-home SaaS platform
@@ -48,7 +51,7 @@ flowchart LR
   APP -->|JWT| WAF --> APIGW --> ORCH
   SPK -->|utterance topic| IOTC --> ORCH
   ORCH <--> CACHE
-  ORCH -->|SigV4 + runtimeUserId| RT
+  ORCH -->|SigV4 + runtimeUserId, orchestrator role only| RT
   RT --> BR
   RT <--> MEM
   RT -->|M2M token from Identity| GW -->|API key from Identity| PAPI
@@ -66,11 +69,36 @@ flowchart LR
 | API Gateway (app) | Authenticates users with Cognito, validates request bodies, throttles. WAF in front. |
 | Orchestrator Lambda | The only component on the waiting path: gets the session, preloads device context, calls the agent once, runs validation, ambiguity guard and sensitive-action policy, dispatches in parallel, builds the reply, writes governed preferences. |
 | ElastiCache (Valkey) | Preloaded device lists, latest reported state, session ids, confirmation tokens, idempotency records. |
-| AgentCore Runtime | Hosts the Strands agent. Reads preferences and recent turns from Memory, returns a JSON plan. Its only tool is a read-only status query through the Gateway. |
+| AgentCore Runtime | Hosts the Strands agent (direct code deployment). Receives devices and preferences preloaded in the payload; reads recent turns from Memory only when its session microVM is new; returns a JSON plan. Its only tool is a read-only status query through the Gateway. |
 | AgentCore Memory | Short-term events (actor = user, session = runtime session). Long-term preference and alias records written by the orchestrator under `/members/<id>/preferences/` with metadata and expiry. |
 | AgentCore Gateway + Identity | Wraps the platform REST API as MCP tools from its OpenAPI description. Inbound: Cognito M2M JWT obtained by the agent through an Identity OAuth2 credential provider. Outbound: API key held by an Identity API-key credential provider. |
 | Simulated platform | Device directory, membership authorisation, independent command validation, command log, publishing to device topics. Stands in for the real platform; replace it in an integration. |
 | Virtual devices / state sync | Simulate devices on AWS IoT Core and carry reported state back to the platform, the cache and the app's event topic. |
+
+## Trust boundaries
+
+| # | Boundary | What crosses it | Control |
+|---|---|---|---|
+| B1 | Internet -> App API | User utterances, confirmation tokens | Cognito ID token (authoriser), JSON-schema validation, throttling, AWS WAF |
+| B2 | Voice device -> AWS IoT Core | Recognised text on `<topicPrefix>/speakers/<id>/utterance` | IoT authentication (developer IAM in the prototype; certificates in production); owner looked up on the platform; sensitive actions never confirmed on this channel |
+| B3 | Orchestrator -> AgentCore Runtime -> Amazon Bedrock | Preloaded context and the utterance; the plan back | SigV4; runtime resource policy allows only the orchestrator role; the plan is untrusted until validated |
+| B4 | Agent -> AgentCore Gateway -> platform API | Read-only status tool calls | M2M JWT from AgentCore Identity; Cedar default deny (control tool denied); API key held by Identity |
+| B5 | Orchestrator -> platform API -> AWS IoT Core -> devices | Validated commands | API key; platform re-checks membership and command ranges |
+| B6 | Devices -> state sync -> cache / prompt | State reports, receipts | Catalog filter on keys and values; receipt bound to its device |
+| B7 | Orchestrator -> AgentCore Memory | Preference and alias records | Written only by the orchestrator under code rules; runtime role can only list records and write conversation events |
+
+## Deployment topology
+
+One CloudFormation stack in one Region (`proto-nl-sandbox` or `proto-nl-handover`):
+
+* **VPC** with two AZs (chosen at deploy time with `Fn::GetAZs`), public and private subnets, one or two NAT
+  gateways (`natGateways`), flow logs to CloudWatch Logs, DynamoDB gateway endpoint.
+* **Private subnets:** orchestrator and state-sync Lambdas, ElastiCache Serverless (Valkey) endpoints.
+* **Outside the VPC:** platform API and virtual-device Lambdas, both REST APIs (Regional endpoints, WAF), AWS IoT
+  Core rules, Cognito user pool, DynamoDB tables, Secrets Manager secrets, AgentCore Runtime (public network
+  mode), Memory, Gateway, policy engine and credential providers, CloudWatch dashboard and alarm.
+* **Shared, not owned by the stack:** the CDK bootstrap bucket (assets), the account-level API Gateway
+  CloudWatch Logs role, service-linked roles created by AWS services.
 
 ## Request path ("我要睡觉了")
 
@@ -123,23 +151,29 @@ Design choices on this path:
 |---|---|---|
 | UUID whitelist | `validation.py` | Only devices in the caller's preloaded context. Others rejected and counted. |
 | Command range | `validation.py`, `catalog.py` | Action must exist for the device type; parameters known, typed, in range, required ones present. |
-| Contradictions / duplicates / cap | `validation.py` | Opposite actions on one device are dropped and the user is asked; duplicates collapsed; action count capped. |
-| Same-name ambiguity | `ambiguity.py` | If the utterance names a device whose name or app alias is not unique and does not disambiguate it, no action is taken; the user is asked. |
+| Contradictions / duplicates / cap | `validation.py` | Actions that set the same state key on one device to different values (lock + unlock, turnOff + setBrightness) are dropped and the user is asked; duplicates collapsed; action count capped. |
+| Same-name ambiguity | `ambiguity.py` | If the utterance names a device whose name, app alias or remembered alias is not unique and does not disambiguate it, no action is taken; the user is asked. Selecting every device of the group needs a universal quantifier (都/全部/所有); a room counts only as the longest matched room name. |
+| Non-finite numbers | `models.py`, `catalog.py` | NaN, Infinity and overflowing numbers make the plan unparsable (fallback); the parameter check never converts them. |
+| Skip reasons | `models.py`, `messages.py` | `skipped[].reason` is a fixed code; the reply uses fixed text per code. |
+| Downstream failures | `orchestrator.py`, `functions/orchestrator/handler.py` | Preload, cache, runtime, model and confirmation failures return the fixed reply with a metric (DECISIONS.md D27). |
+| Device reports | `catalog.py`, `functions/state_sync/handler.py` | Only catalog-defined state keys with valid values are stored and shown to the model; a receipt is only updated by its device. |
+| Idempotency | `orchestrator.py` | Key claimed with SET NX and bound to the request content; reuse with another utterance is HTTP 409. |
 | Sensitive actions | `policy.py` | Defined per action: `lock.unlock`, `security_system.disarm`. Always held; confirmed only on the app API with a single-use, user-bound, short-lived token. |
 | Malformed output | `models.py`, `orchestrator.py` | Fixed fallback reply; raw output only in logs; counted. Runtime or model errors get the same fallback, never an error status. |
 | Narrow normalisation | `validation.py` | Digit-only strings for integer parameters become integers; `turnOn` with one value parameter becomes the matching `set*` action. Nothing else is rewritten. |
 | Platform validation | `platform_api/handler.py` | The platform independently re-validates commands and membership. |
 | Gateway policy | Cedar policy engine (`stack.py`) | Default deny; only the read-only tools are permitted for the agent's tokens. `controlDevice` cannot be called through the gateway. |
-| Runtime access | Runtime resource policy (`stack.py`) | Only the orchestrator role may invoke the runtime or assert a user id. |
+| Runtime access | Runtime resource policy (`stack.py`) | Only the orchestrator role may invoke the runtime or pass a runtime user id. |
 
 ## Memory governance
 
 | Rule | Implementation |
 |---|---|
-| Only explicit preferences | Taste parameters (brightness, colour temperature, target temperature, volume) of *accepted* actions, only if the value appears in the utterance; values the model took from preferences are never written back. Relative requests ("调暗一点") write nothing. |
-| One version per device and attribute | Before writing, existing records for the same `deviceUuid` + `attribute` (metadata filter) are deleted. Listing is eventually consistent, so reads keep only the newest record per device and attribute, and later writes remove any leftovers. |
-| Ageing | Records are created with an expiry (`preferenceTtlDays`, configurable). |
-| Aliases | Stored as auxiliary context, must map to a permitted device, cannot shadow an authoritative device name or app alias. |
+| Only explicit preferences | Taste parameters (brightness, colour temperature, target temperature, volume) of *accepted* actions, only if the user stated the value next to its unit ("30%", "26度") or after a setting phrase ("亮度调到30"); "30分钟后" does not count; values the model took from preferences are never written back as new preferences. Relative requests ("调暗一点") write nothing. |
+| One version per device and attribute | The new record is created first, then existing records for the same `deviceUuid` + `attribute` (metadata filter) are deleted. Listing is eventually consistent, so reads keep only the newest record per device and attribute, and later writes remove any leftovers. Reads follow pagination. |
+| Ageing | Records are created with an expiry (`preferenceTtlDays`). A dispatched action that used a remembered value rewrites the record when it is older than 7 days, so expiry means "not used for `preferenceTtlDays`". |
+| Aliases | Stored as auxiliary context, must map to a permitted device, cannot shadow an authoritative device name, app alias or another device's remembered alias. Used to detect ambiguity, never to choose a device. |
+| Scope | Records of devices the user can no longer control are not sent to the model. |
 | Single writer | Only the orchestrator writes long-term records; the runtime role can only list records and write conversation events. |
 | Off the waiting path | The orchestrator sends preferences with the request (cache-backed, invalidated on write); recent turns are kept in the runtime session's microVM. Memory is read only on a cache miss or a new microVM. |
 
@@ -147,7 +181,9 @@ Design choices on this path:
 
 * Orchestrator emits CloudWatch EMF metrics per request: `LatencyTotal`, `LatencyPreload`, `LatencyInference`,
   `LatencyDispatch`, cache hit/miss, actions dispatched/failed/rejected, sensitive actions held, ambiguous
-  references, parse failures, model input/output tokens and agent tool calls (returned by the runtime).
+  references, parse/preload/unhandled failures, cache failures, alias conflicts, idempotency conflicts, model
+  input/output tokens, agent tool calls and tool errors (returned by the runtime). The state-sync Lambda emits
+  `ReceiptLatency` (platform acceptance -> device report) and receipt result counts.
 * Dashboard `<prefix>-dashboard` and an alarm on `LatencyTotal` P95 above the configured target.
 * The agent runs under the ADOT auto-instrumentation (`opentelemetry-instrument` entry point). Viewing AgentCore spans in CloudWatch
   requires CloudWatch Transaction Search, an account-level setting this stack does not change.
@@ -174,24 +210,38 @@ use the `LatencyTotal` P95 metric over real traffic.
 * Writing a memory record with an expiry required the IAM action
   `bedrock-agentcore:UpdateMemoryRecordExpirySpecification` in testing; it is granted to the orchestrator.
 * Only overseas (non-China) AWS Regions are targeted; AgentCore is not listed for the China Regions (see below).
+* The agent's gateway identity is shared by all sessions; the platform trusts the `userId` tool argument for the
+  read-only status tool (THREAT_MODEL.md T3).
+* If a request fails after dispatching, a retry with the same idempotency key can dispatch again (D32).
 
 ## Fact check
 
-Verified against official documentation on 2026-10-20.
+Verified against official documentation on 2026-10-20; rows marked 2026-10-21 were added or re-checked in the
+0.1.0 round. "Observed in testing" means a deployment result, not a documented guarantee.
 
 | Statement used in this repository | Source |
 |---|---|
 | Each AgentCore Runtime session runs in its own microVM; AgentCore does not map sessions to users, the client backend must. | [Use isolated sessions for agents](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/runtime-sessions.html) |
 | Runtime session ids must be at least 33 characters. | [Use isolated sessions for agents](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/runtime-sessions.html) |
 | HTTP protocol contract: port 8080, `/invocations`; SigV4 or OAuth inbound. | [Runtime service contract](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/runtime-service-contract.html) |
-| Passing a user id (`X-Amzn-Bedrock-AgentCore-Runtime-User-Id` / `runtimeUserId`) requires `bedrock-agentcore:InvokeAgentRuntimeForUser`; the value is not verified by AgentCore and must be derived from an authenticated principal. | [Inbound and outbound auth](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/runtime-oauth.html) |
+| Passing a user id (`X-Amzn-Bedrock-AgentCore-Runtime-User-Id` / `runtimeUserId`) requires `bedrock-agentcore:InvokeAgentRuntimeForUser`; the value is not verified by AgentCore and must be derived from an authenticated principal. The prototype derives it from the Cognito `sub` (D25). | [Inbound and outbound auth](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/runtime-oauth.html) |
 | A runtime supports either SigV4 or JWT inbound auth, not both; a workload identity is created automatically. | [Inbound and outbound auth](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/runtime-oauth.html) |
 | Gateway OpenAPI targets support OpenAPI 3.0/3.1; `operationId` becomes the tool name; servers URL must be the real endpoint; outbound auth can be an API key or OAuth credential provider from AgentCore Identity in the same account and Region; oneOf/anyOf/allOf unsupported. | [OpenAPI schema targets](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/gateway-schema-openapi.html) |
 | Gateway tool names are `<target>___<operationId>`. | [Call a tool in a gateway](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/gateway-using-mcp-call.html) |
 | Memory organises short-term events by actor and session; long-term records live in namespaces that should start and end with `/`. | [Memory organization](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/memory-organization.html) |
 | `BatchCreateMemoryRecords` accepts namespaces, metadata and a record expiry specification; `ListMemoryRecords` supports metadata filters. | AWS SDK service model `bedrock-agentcore` (boto3 1.43.115), operations `BatchCreateMemoryRecords`, `ListMemoryRecords`, `BatchDeleteMemoryRecords` |
 | Viewing AgentCore spans in CloudWatch requires CloudWatch Transaction Search; agents use ADOT (`aws-opentelemetry-distro>=0.18.0`) and `opentelemetry-instrument`. | [Add observability](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/observability-configure.html) |
-| AgentCore Runtime, Memory, Gateway, Identity and Observability are available in us-east-1; the Region table lists no China Regions. | [Supported AWS Regions](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/agentcore-regions.html) |
+| AgentCore Runtime, Memory, Gateway, Identity, Observability and Policy are available in us-east-1 and us-west-2 (both used for deployment checks); the Region table lists no China Regions. (2026-10-21) | [Supported AWS Regions](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/agentcore-regions.html) |
+| Direct code deployment: the agent is a .zip package with its dependencies; supported Python runtimes include `PYTHON_3_13`; POSIX file permissions apply to the package; AgentCore patches the language runtime, the owner patches code and dependencies; direct code deployment allows a higher session creation rate than container deployment. (2026-10-21) | [Direct code deployment](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/runtime-get-started-code-deploy.html), [Supported language runtimes](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/runtime-code-deploy-supported-runtimes.html) |
+| Credentials created at import time in a code-deployed runtime can be stale, so clients are built per call (D26). | Observed in testing and in the official samples' change history; not stated on the documentation pages above |
+| Runtime scaling: each session gets its own microVM, created on demand when a new session id is invoked; the client backend maps users to sessions. (2026-10-21) | [Use isolated sessions for agents](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/runtime-sessions.html), [Direct code deployment](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/runtime-get-started-code-deploy.html) |
+| Resource-based policies are supported for Runtime (and endpoints), Gateway and Memory; actions include `InvokeAgentRuntime` and `InvokeAgentRuntimeForUser`; explicit deny wins; the `Resource` must be the exact ARN of the resource. The stack uses `AWS::BedrockAgentCore::ResourcePolicy`. (2026-10-21) | [Resource-based policies](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/resource-based-policies.html) |
+| Runtime execution-role trust policy uses `aws:SourceAccount` and `ArnLike aws:SourceArn`; workload identities are named after the agent (`workload-identity/<agentName>-*`). (2026-10-21) | [IAM permissions for AgentCore Runtime](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/runtime-permissions.html) |
+| AgentCore Identity: workload identities in a directory (`workload-identity-directory/default/workload-identity/<name>`); a token vault stores OAuth 2.0 tokens, OAuth client credentials and API keys; OAuth2 (client credentials and authorization code) and API-key credential providers. Identity verifies who the agent is and supplies credentials; what a user may do on the platform stays in the platform's own authorisation (membership check), which this prototype keeps. (2026-10-21) | [AgentCore Identity features](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/key-features-and-benefits.html) |
+| AWS IoT and VPC flow-log role trust policies support `aws:SourceAccount` and `aws:SourceArn`. (2026-10-21) | [IoT confused deputy prevention](https://docs.aws.amazon.com/iot/latest/developerguide/cross-service-confused-deputy-prevention.html), [Flow logs IAM role](https://docs.aws.amazon.com/vpc/latest/userguide/flow-logs-iam-role.html) |
+| For SigV4 callers, the runtime passes a workload access token to the container only when a runtime user id is supplied; without it the AgentCore SDK cannot fetch OAuth2 tokens from the token vault (D25). | Observed in testing (2026-10-21); consistent with the SDK message pointing to [Inbound and outbound auth](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/runtime-oauth.html) |
+| `GetResourceOauth2Token` for an OAuth2 credential provider with an `EXTERNAL` client secret reads the secret with the caller's permissions, so the runtime role needs `secretsmanager:GetSecretValue` on it. | Observed in testing (AccessDenied naming the secret, 2026-10-21) |
+| The inference profiles `us.amazon.nova-lite-v1:0` and `us.amazon.nova-2-lite-v1:0` are listed in us-east-1 (D12). | Observed in testing: `ListInferenceProfiles`, us-east-1, 2026-10-21 |
 | Nova Lite model id `amazon.nova-lite-v1:0`; US geo inference profile `us.amazon.nova-lite-v1:0` (from us-east-1 routes to us-east-1, us-east-2, us-west-2); Converse API and client-side tool calling supported; Bedrock's native "structured outputs" feature not supported. This repository gets structured output through tool calling (Strands `structured_output_model`). | [Nova Lite model card](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-amazon-nova-lite.html) |
 | ElastiCache IAM auth: Valkey 7.2+; TLS required; user id must equal user name; tokens valid 15 minutes; connections disconnected after 12 hours; requires `elasticache:Connect` on the cache and the user; serverless token requests include `ResourceType=ServerlessCache`. | [Authenticating with IAM](https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/auth-iam.html) |
 | Policy in AgentCore: engines associated with a gateway evaluate every tool call; default-deny and forbid-wins; `AgentCore::OAuthUser` principals come from the JWT `sub` with JWT claims as tags; the gateway execution role needs `AuthorizeAction`, `PartiallyAuthorizeActions` (on the engine and the gateway) and `GetPolicyEngine`; gateway modes `LOG_ONLY` / `ENFORCE`. | [Policy core concepts](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/policy-core-concepts.html), [Policy IAM permissions](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/policy-permissions.html); CloudFormation schema `AWS::BedrockAgentCore::Gateway` (`PolicyEngineConfiguration.Mode`) |

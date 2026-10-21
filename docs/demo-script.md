@@ -5,15 +5,16 @@ About 15 minutes. Run offline first (no account needed), then against a deployed
 ## Part 1 - offline (2 min)
 
 ```bash
-uv run python scripts/run_eval.py
+make eval
 ```
 Point out: every hard check has a case; the adversarial cases inject the model output directly
-(hallucinated uuid, another home's device, illegal action, out-of-range value, invalid JSON, a model that
-claims "门锁已经帮你打开了").
+(hallucinated uuid, another home's device, illegal action, out-of-range value, invalid JSON, NaN, a model that
+claims "门锁已经帮你打开了" or writes a phishing text into `skipped[].reason`); the negative control (a deliberately
+wrong planner) must be reported as failing.
 
 ## Part 2 - deployed stack
 
-Prepare once: deploy, then `uv run python scripts/seed_demo.py`.
+Prepare once: deploy and seed with the commands in the [README](../README.md#deploy).
 
 | Step | Command | What to show |
 |---|---|---|
@@ -21,7 +22,7 @@ Prepare once: deploy, then `uv run python scripts/seed_demo.py`.
 | 2. Scene | `uv run python scripts/demo.py say "我要睡觉了"` | Lights and curtain dispatched; front door lock in `skipped`; reply starts with "已下发指令" and is built from accepted results; `timings_ms` per segment. |
 | 3. Asynchronous receipt | `uv run python scripts/demo.py receipt <command_id from step 2>` | `accepted` turns into `executed` after the virtual device reports; the response in step 2 did not wait for it. |
 | 4. Fuzzy reference | `uv run python scripts/demo.py say "把客厅那个灯调暗点"` | Relative change; no preference written (no stated value). |
-| 5. Same-named devices | `uv run python scripts/demo.py say "打开床头灯"` then `say "打开次卧的床头灯"` | First asks which one (no action), second acts. |
+| 5. Same-named devices | `uv run python scripts/demo.py say "打开床头灯"` then `say "打开次卧的床头灯"` and `say "把床头灯都打开"` | First asks which one (no action), second acts on one, third on both (explicit "都"). |
 | 6. Explicit preference | `say "把主卧灯亮度调到30"` then `say "打开主卧灯，按我平常的亮度"` | The stated value is stored once (overwrite), and used later. |
 | 7. Sensitive action | `say "帮我把前门锁打开"` | Nothing dispatched; `pending_confirmation` with a token. |
 | 8. Confirmation | `uv run python scripts/demo.py confirm <token>` | Dispatched now; running the same confirm again fails (single use). |

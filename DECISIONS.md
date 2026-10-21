@@ -69,12 +69,13 @@ Each entry records the choice, the alternatives considered, and why the more con
 
 ## D12. Default model
 * **Choice:** `us.amazon.nova-lite-v1:0` (cross-region inference profile), configurable.
-* **Why:** a lightweight model fits shallow intent matching with structured output; Nova 2 Lite is available
-  in the test region and can be selected in the config file.
+* **Why:** a lightweight model fits shallow intent matching with structured output. The inference profile
+  `us.amazon.nova-2-lite-v1:0` was also listed by `ListInferenceProfiles` in us-east-1 during testing
+  (2026-10-21) and can be selected in the config file; it was not evaluated in this round.
 
 ## D13. Python everywhere, arm64
-* **Why:** one language for core, Lambdas, agent and CDK; Lambdas run on arm64, the agent container is ARM64
-  (required by AgentCore Runtime).
+* **Why:** one language for core, Lambdas, agent and CDK; Lambdas run on arm64, and the agent package is built
+  from ARM64 (aarch64) wheels for the direct-code-deployment runtime (D26).
 
 ## D14. Prompt layout: one data block, no system-prompt caching
 * **Tried:** stable device data in a cacheable system prompt (with a cache point), state in the user message.
@@ -103,7 +104,7 @@ Each entry records the choice, the alternatives considered, and why the more con
   action. Everything else that does not match the catalogue is rejected.
 
 ## D19. Second review against recent AgentCore samples
-A second review against recent public AgentCore samples. Changes
+A second review compared the prototype with recent public AgentCore samples (aws-samples and awslabs). Changes
 adopted from it are D20-D25; items considered and not adopted are listed at the end of this entry.
 * Not adopted at the time: Runtime direct code deployment (adopted later, see D26); CDK L2 constructs (the OpenAPI target with an API-key provider still needs L1); vended log delivery
   for Memory and Gateway (it creates CloudWatch Logs resource policies at account level that the stack would not
@@ -112,7 +113,7 @@ adopted from it are D20-D25; items considered and not adopted are listed at the 
 
 ## D20. Runtime resource policy
 Only the orchestrator role may call `InvokeAgentRuntime` / `InvokeAgentRuntimeForUser`; every other principal is
-explicitly denied, whatever its identity-based permissions. This bounds the trust placed in `runtimeUserId`.
+explicitly denied, whatever its identity-based permissions. This bounds the trust placed in `runtimeUserId` (D25).
 
 ## D21. Default-deny Cedar policy engine on the gateway
 The gateway still exposes all three platform operations (the API is wrapped as-is), but the policy engine,
@@ -121,23 +122,38 @@ tokens from this stack's user pool. `controlDevice` is denied at the gateway, so
 through the orchestrator's validated path even if the agent were changed to call it.
 
 ## D22. Trust policies with source ARN
-The gateway role's trust policy adds `aws:SourceArn` (this stack's gateway name pattern) to `aws:SourceAccount`;
-the runtime role already had both.
+Every service role whose service documents the confused-deputy keys carries both `aws:SourceAccount` and an
+`ArnLike aws:SourceArn` narrowed to this stack's resource: runtime `runtime/<prefix_>_agent*`, gateway
+`gateway/<prefix>-gateway*`, IoT rule error role `rule/<prefix_>_*`, flow-log role `vpc-flow-log/*` (a dedicated
+role instead of the CDK default, which has no conditions). Lambda execution roles have none (no documented
+keys); see the table in SECURITY-NOTES.md.
 
-## D23. Narrower identity permissions for the runtime
+## D23. Narrower identity permissions for the runtime and gateway
 The runtime no longer holds `GetWorkloadAccessToken*`: the workload access token is delivered to the container
-by the runtime. It keeps `GetResourceOauth2Token` on the workload-identity directory, the token vault and the one
-OAuth2 provider.
+by the runtime. It keeps `GetResourceOauth2Token` on the workload-identity directory, its own workload identity
+(`workload-identity/<prefix_>_agent*`), the token vault and the one OAuth2 provider. The gateway's
+`GetWorkloadAccessToken` / `GetResourceApiKey` is scoped to `workload-identity/<prefix>-gateway*`. The runtime
+role keeps `GetSecretValue` on the M2M client secret: removing it was tried in this round and the deployment
+check failed (`GetResourceOauth2Token` reads an `EXTERNAL` client secret with the caller's permissions).
 
 ## D24. Explicit runtime lifecycle
 `idleRuntimeSessionTimeout` equals the orchestrator's session idle TTL (`sessionIdleSeconds`), so a session id
 expires in the cache when its microVM (and the in-process conversation history) is gone; `maxLifetime` is a
 parameter.
 
-## D25. Batch-call failures and identity cross-check in the agent
+## D25. Batch-call failures; runtimeUserId kept, agent-side cross-check removed
 `BatchCreateMemoryRecords` failures (`failedRecords`) raise; partial delete failures are logged. The agent tags
-traces with user and session, and rejects a payload whose user differs from the runtime user header when the
-runtime exposes that header to the container.
+traces with user and session.
+* **runtimeUserId:** the orchestrator passes the verified user id (Cognito `sub`, or the speaker's registered
+  owner) as `runtimeUserId`. Removing it was tried in this round and failed in the deployment check: for SigV4
+  callers the runtime hands the container a workload access token only when a runtime user id is given, so
+  the agent could not obtain its M2M token for the gateway (the SDK fell back to `CreateWorkloadIdentity`,
+  which was denied). It is therefore required, not optional. `InvokeAgentRuntimeForUser` is granted only to the
+  orchestrator role, and the runtime resource policy denies every other principal (D20).
+* **Cross-check removed:** the earlier agent code compared the payload user with a runtime user header; the
+  runtime does not pass that header to the container (only allow-listed custom headers and the workload token
+  reach it), so the check never ran. It was removed rather than kept as an inert control. The payload user is
+  trusted because only the orchestrator can invoke the runtime and it takes the id from verified identity.
 
 ## D26. Direct code deployment for the agent (no Docker)
 * **Choice:** the agent ships as an AgentCore Runtime direct code deployment: `infra/smarthome_infra/build.py`
@@ -151,3 +167,78 @@ runtime exposes that header to the container.
 * **Alternative:** the container image (`src/agent/Dockerfile`, kept as an optional path for teams that need
   system packages). It needs a local runtime able to build `linux/arm64` images and leaves images in the CDK
   bootstrap ECR repository.
+
+## D27. Downstream failures: fixed reply, never an unhandled 5xx
+* **Choice:** inside the orchestrator every failure on the request path (preload, cache, runtime, model,
+  confirmation, anything unexpected) returns `type: "error"` with a fixed reply and an EMF metric. In the Lambda
+  handler, the reply routes (`POST /v1/commands`, `POST /v1/confirmations`) answer **HTTP 200** with the fixed
+  reply on any remaining exception; the read-only routes answer **HTTP 503** with a fixed body. An idempotency
+  key reused for a different request is **HTTP 409**.
+* **Why:** the app always gets a reply it can show for user-facing requests; read routes have no reply to show,
+  and 503 tells a client to retry. Failure metrics (`PreloadFailure`, `UnhandledFailure`, `HandlerFailure`, ...)
+  keep outages visible.
+
+## D28. Skip reasons are codes
+* **Choice:** `skipped[].reason` is one of `already_in_state`, `sensitive_action`, `not_needed`, `other`; any other
+  model output becomes `other`. The reply shows fixed text per code (none for `other`); the response carries the
+  code only.
+* **Why:** the reply must never contain model-written prose (FR-10). A code still lets the app explain the most
+  common case (a lock already locked).
+
+## D29. mcp pinned to 1.30.0
+* **Choice:** `mcp>=1.30.0,<2.0` in `pyproject.toml` and `mcp==1.30.0` in `src/agent/requirements.txt`.
+* **Why:** GHSA-84m7-p3x7-pcfv (High) affects mcp 1.8.0-1.29.1 and 2.0.0-2.1.1 and is fixed in 1.30.0 and 2.2.0
+  (OSV record, checked 2026-10-21). `strands-agents` 1.61.1 (latest) declares `mcp<2.2`, so 2.2.0 cannot be
+  installed without overriding its declared range; 1.30.0 is the fixed version inside that range. The agent uses
+  only the MCP client; the advisory concerns Streamable HTTP servers. Dependabot ignores mcp major updates until
+  strands-agents accepts mcp>=2.2.
+
+## D30. Same-name devices and remembered aliases
+* **Choice:** a plan that targets every device of a same-name group is accepted only when the utterance contains
+  a universal quantifier (都, 全部, 所有, 全都, 每个, 每一个); a room name disambiguates only as the longest matched
+  room name; remembered aliases count as labels for ambiguity detection; an alias already remembered for another
+  device is refused with a question.
+* **Why:** FR-8 says an unresolvable reference must be confirmed, not guessed. Refusing a conflicting alias is
+  simpler and more conservative than silently moving it; the user can choose another name.
+* **Limits:** "都" can appear in unrelated phrasing; the quantifier list is deliberately short.
+
+## D31. Preference expiry means "not used"
+* **Choice:** records still expire `preferenceTtlDays` after they were written, but a dispatched action that used
+  a remembered value rewrites the record when it is older than 7 days (`REFRESH_AFTER_DAYS`), which resets its
+  expiry. Stated values must be next to their unit or after a setting phrase.
+* **Why:** FR-9 asks to age out preferences that are no longer triggered; refreshing on every use would add a
+  Memory write to most requests.
+
+## D32. Idempotency bound to the request
+* **Choice:** the idempotency entry stores a hash of channel and utterance and is claimed with `SET NX`; a reused
+  key with another request is a conflict (HTTP 409); a retry while the first attempt runs gets a fixed "in
+  progress" reply; failed requests release the key.
+* **Limits:** if a request fails after dispatching, a retry can dispatch again.
+
+## D33. Account-agnostic synth, templates for configuration, guarded commands
+* **Choice:** the stack passes no account to `cdk.Environment`, so synth needs no credentials or context lookups
+  (CI) and no account id is written to `cdk.json` or configuration. Parameter files are templates
+  (`config/*.example.json`, copied by `make init`). `make preflight` shows the last 4 digits of the account and
+  requires confirmation; `make deploy` refuses deletions/replacements without `ALLOW_DESTRUCTIVE=1`; commands that
+  call the model need `ALLOW_PAID=1`; the CDK CLI version is pinned.
+* **Why:** standards decisions 5 and 6. The two AZs now come from `Fn::GetAZs` at deploy time.
+
+## D34. Resource prefix and Cognito domain
+* **Choice:** `resourcePrefix` `proto-nl`, stacks `proto-nl-sandbox` / `proto-nl-handover`, tag `Project=proto-nl`;
+  the stack name must start with the prefix (cleanup matches on it). The Cognito domain prefix uses the first
+  block of the stack UUID instead of the account id, so the public hosted domain does not reveal the account.
+  The platform path segment `users` became `members` (`/members/{userId}/devices`, event topic `members/<id>/events`).
+
+## D35. Bootstrap assets identified by asset hash
+* **Choice:** `scripts/bootstrap_assets.py` lists this project's objects in the shared CDK bootstrap bucket: a
+  template counts only if sha256(content) equals its key and its Description is this stack's; code assets count
+  only if such a template references them from this project's own resources. CDK's generic provider packages are
+  never listed. `make destroy` deletes the listed versions after a second confirmation; `make verify-cleanup`
+  fails while any remain. Unidentified objects are never deleted.
+
+## D36. History rewrite once
+The history was rewritten once with git-filter-repo before this round (author identity, Conventional Commit
+subjects, removal of internal names and earlier prefixes). It is not rewritten again, so commit hashes in
+VERIFICATION.md and DEPLOYMENT-LOG.md stay valid. Side effect: the text replacement renamed the API path segment `users` to
+`members` in all historical snapshots but not the CDK path segment `users` and the IAM topic `users/*/events`
+in `stack.py`, so commits before 0.1.0 are not deployable as-is; the first 0.1.0 commit made them consistent.

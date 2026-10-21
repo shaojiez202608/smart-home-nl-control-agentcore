@@ -1,96 +1,82 @@
 # Deployment log
 
-Account: disposable sandbox account (id not recorded). Credentials from the shell environment. All resources
-carried the tags `Project=proto-nl`, `Purpose=prototype`, `Teardown=after-test`. Times are UTC, 2026-10-20. Round 1 (container image) first, round 2 (current code) at the end.
+Account: disposable sandbox account (shown as `111122223333`; preflight confirmed it by its last 4 digits).
+Credentials from the shell environment. Every resource carried the tags `Project=proto-nl`, `Purpose=prototype`,
+`Teardown=after-test`. Only this project's `proto-nl` resources and this project's objects in the shared CDK
+bootstrap buckets were changed; the CDKToolkit stack and other stacks in the account were not touched.
+Times are UTC, 2026-10-21. All 12-digit numbers were replaced before writing this file.
 
-## Attempt 1 - us-east-1 (failed, cleaned up)
+## Round 3 - release 0.1.0, us-east-1
+
+### Cycle 1 - first deployment and fixes (stack `proto-nl-sandbox`)
+| Time | Commit | Event |
+|---|---|---|
+| 01:14-01:25 | `18a3493` | `make deploy`: preflight passed (account confirmed, Elastic IP quota reported below current usage, see `18a3493`); `cdk diff` showed a new stack; `CREATE_COMPLETE`. Seed. |
+| 01:26-01:30 | `18a3493` | `ALLOW_PAID=1 make verify`: 24/29. Failures: preference records not found or not superseded (filtered listings lagged), status tool failed (`CreateWorkloadIdentity` denied: no workload token without `runtimeUserId`), latency target. |
+| 01:42 | `e374910` | Preflight for the update blocked on the stack's own VPC (headroom check fixed). |
+| 01:43-01:47 | `e374910` | `make deploy` stopped at the destructive-change guard (Lambda layer replacement, exit 2); diff reviewed, re-run with `ALLOW_DESTRUCTIVE=1`: update complete. |
+| 01:48-01:53 | `e374910` | e2e 25/29: status tool still failing (same cause), superseded-record check, latency. |
+| 01:58-02:05 | `544c800` | `runtimeUserId` restored; update (guard, then `ALLOW_DESTRUCTIVE=1` for the layer). |
+| 02:06-02:10 | `544c800` | e2e 25/29: status tool now failed on `GetResourceOauth2Token` AccessDenied for the M2M client secret; superseded-record check (listing lag); latency. |
+| 02:12-02:16 | `74c8792` | `GetSecretValue` on the M2M secret restored for the runtime; e2e waits for the listing; update (no replacement). |
+| 02:16-02:20 | `74c8792` | e2e **28/29**: only the latency target failed. |
+| 02:21-02:48 | `74c8792` | `make destroy` (`CONFIRM_STACK`, `CONFIRM_DATA=yes`): stack deleted; 2 CDK provider log groups deleted; 53 bootstrap object versions deleted (below). |
+| 02:49 | `74c8792` | `make verify-cleanup` us-east-1 + us-west-2: **1 leftover** - log group `proto-nl-sandbox-CustomResourceProviderLogs...`, created again at 02:42 by the provider function while it handled a custom-resource delete. Deleted by name with `aws logs delete-log-group`; root cause fixed in `a8faf86`. |
+
+### Cycle 2 - final verification on `a8faf86`
 | Time | Event |
 |---|---|
-| 11:01 | `cdk deploy -c config=config/sandbox.json`. Asset build failed: local Docker daemon not running. No CloudFormation changes. Started the local container runtime and retried. |
-| ~11:05-11:21 | Stack `proto-nl-sandbox` creation started; `AWS::EC2::VPC` and `AWS::EC2::InternetGateway` failed: *"The maximum number of VPCs has been reached"* / *"internet gateways"*. The Region's VPC quota was fully used by existing resources, which were not touched. |
-| 11:24 | Rollback ended in `ROLLBACK_FAILED`: `AWS::BedrockAgentCore::Memory` could not be deleted while still in `CREATING`. |
-| ~11:28 | `aws cloudformation delete-stack` retried once the memory was `ACTIVE`; stack deleted. Verified: no stack, no memory, no user pool (a tag-index entry for the user pool was stale; `describe-user-pool` returned not found). |
+| 02:58-03:10 | `make deploy`: preflight passed; `cdk diff` new stack; `CREATE_COMPLETE`, **166 resources**. |
+| 03:10-03:14 | `make seed`; `ALLOW_PAID=1 make verify`: **28/29** (only the latency target failed; VERIFICATION.md). |
+| 03:14-03:24 | `make destroy`: stack deleted; 1 CDK provider log group deleted; 7 bootstrap object versions of this cycle deleted. |
+| 03:25 | `make verify-cleanup --regions us-east-1 us-west-2`: **No leftovers found** (exit 0). |
 
-**Region change:** us-west-2 chosen because it had VPC quota headroom, an existing CDK bootstrap, the
-`us.amazon.nova-lite-v1:0` inference profile, and AgentCore Runtime / Memory / Gateway / Identity listed as
-available. Region was set with `AWS_REGION` / `CDK_DEFAULT_REGION` for the commands; repository defaults unchanged.
+### Resource inventory (stack `proto-nl-sandbox`, 166 resources)
+VPC with 4 subnets, 4 route tables, internet gateway, 1 NAT gateway + Elastic IP, DynamoDB gateway endpoint, flow
+log with its own role; 2 security groups; ElastiCache Serverless cache + user + user group; 4 DynamoDB tables;
+2 Secrets Manager secrets; 6 Lambda functions (4 application, 2 CDK providers) and 1 layer; 3 AWS IoT topic rules;
+2 API Gateway REST APIs (stages, 10 methods, models, validators, authoriser, API key, usage plan); AWS WAF web ACL +
+2 associations; Cognito user pool, domain (prefix from the stack UUID), resource server, 2 clients; AgentCore
+Runtime, runtime resource policy, Memory, Gateway, Gateway target, policy engine + Cedar policy, API-key and OAuth2
+credential providers; 10 IAM roles / 12 policies; SQS dead-letter queue; 9 log groups; CloudWatch dashboard and
+alarm; 4 custom resources (IoT endpoint, runtime log retention, Cognito client secret, default security group
+restriction).
 
-## Attempt 2 - us-west-2 (succeeded)
-| Time | Event |
-|---|---|
-| 11:30-11:40 | Initial deploy, 160 resources, `CREATE_COMPLETE`. Seed script loaded the synthetic homes. |
-| 11:41-14:00 | Iterations (10 updates), each followed by tests: Memory expiry parameter fix; IAM action for record expiry; prompt boundary for direct unlock requests; parallel memory reads and segment metrics; prompt-caching layout (later reverted); preloaded preferences and in-session history; cache signer fix; newest-wins preference reads; logging of rejection details; turnOn-with-value normalisation; agent-failure fallback; config-driven nag acknowledgement; one deploy with Amazon Nova Micro for comparison, then back to Amazon Nova Lite. |
-| 12:4x | Diagnosis of `AccessDenied` on `BatchCreateMemoryRecords` with an expiry: IAM simulation allowed the three listed actions; a temporary inline policy `tmp-probe` on the orchestrator role (resource: the one memory ARN) was used to narrow the missing action by wildcard patterns to `bedrock-agentcore:UpdateMemoryRecordExpirySpecification`, which was then added to the stack. The manual removal of `tmp-probe` was blocked by the local tool permission settings; the policy was left granting only non-existent action names and was removed by CloudFormation together with the role during `destroy` (role confirmed deleted). |
-| 13:58 | Final verification on the final code with Amazon Nova Lite: e2e 21/22 (see VERIFICATION.md). |
-
-### Resource inventory (stack `proto-nl-sandbox`, us-west-2, 160 resources)
-VPC with 4 subnets, 4 route tables, 1 NAT gateway + EIP, internet gateway, DynamoDB gateway endpoint, flow log;
-2 security groups; ElastiCache Serverless cache + user + user group; 4 DynamoDB tables; 2 Secrets Manager secrets;
-6 Lambda functions (4 application, 2 CDK custom-resource providers) and 1 layer; 3 AWS IoT topic rules;
-2 API Gateway REST APIs (stages, 9 methods, models, validators, authoriser, API key, usage plan); AWS WAF web ACL
-+ 2 associations; Cognito user pool, domain, resource server, 2 clients; AgentCore Runtime, Memory, Gateway,
-Gateway target, API-key and OAuth2 credential providers; 10 IAM roles / 11 policies; SQS dead-letter queue;
-8 log groups; CloudWatch dashboard and alarm; 3 custom resources.
-
-## Destroy and leftover check
-| Time | Event |
-|---|---|
-| 14:04-14:20 | `npx aws-cdk@latest destroy -c config=config/sandbox.json --force` -> stack deleted (VPC Lambda ENI release took most of the time). |
-| 14:2x | Leftover check in **us-west-2 and us-east-1** by stack name, tags and resource type (see below). |
-
+### Leftover check (after cycle 2), us-east-1 and us-west-2
 | Resource class | Result |
 |---|---|
-| CloudFormation stacks `NlControl*` | none (both Regions) |
-| AgentCore runtimes, gateways, memories, API-key / OAuth2 credential providers, workload identities (`proto-nl*`) | none |
-| ElastiCache serverless caches, users, user groups (`proto-nl*`) | none |
-| IoT topic rules, WAF web ACLs, Cognito user pools, API Gateway APIs, Lambda functions/layers, SQS queues, DynamoDB tables, Secrets Manager secrets (incl. planned deletion) | none |
-| VPCs / EIPs with the project tag; NAT gateway | none (NAT gateway in `deleted` state) |
-| IAM roles `NlControl*` | none |
-| Tag index (`Project=proto-nl`) | 4 stale entries (user pool, flow log, VPC endpoint, NAT gateway); each verified as deleted / not found |
-| Log groups created outside the stack (AgentCore Runtime log group, 2 CDK provider Lambda log groups) | deleted manually |
-| KMS keys | none created (AWS owned / AWS managed keys only) |
-| ECR images in the CDK bootstrap repositories (agent image, 5 tags in us-west-2, 1 in us-east-1) | deleted; matched one-to-one against the locally built asset hashes |
-| S3 objects in the CDK bootstrap buckets | see below |
+| CloudFormation stack `proto-nl-sandbox` | none |
+| AgentCore runtimes, gateways, memories, policy engines, API-key and OAuth2 providers, workload identities (`proto-nl` / `proto_nl`) | none |
+| ElastiCache serverless caches, users, user groups | none |
+| IoT topic rules, WAF web ACLs, REST APIs, Cognito user pools, dashboards | none |
+| Log groups (runtime, Lambda, stack-named) | none (runtime group deleted by its custom resource; provider groups by the cleanup script) |
+| DynamoDB tables, SQS queues, Lambda functions and layers, alarms, Secrets Manager secrets incl. scheduled deletion | none |
+| Tag index `Project=proto-nl` | no entry that still exists |
+| IAM roles and customer managed policies `proto-nl-sandbox*` | none |
+| KMS keys, S3 buckets, ECR images | none created by the stack |
+| This project's objects in the CDK bootstrap buckets | none (below) |
 
-### S3 objects in the CDK bootstrap buckets
-The bootstrap buckets are shared by every CDK app in the account (another application also deployed to
-us-east-1 the same day). Each object version uploaded on the test day was classified by **content**:
-templates by their stack description, Lambda zips by their handler source, layer zips by reading the zip
-central directory for `python/smarthome_core/`.
+### CDK bootstrap assets
+Identified with `scripts/bootstrap_assets.py`: a template counts only if sha256(content) equals its key and its
+Description is this stack's; code objects only if such a template references them from this project's own
+resources. CDK's generic provider packages and other applications' objects were not touched (they are still in
+the buckets).
 
-| Region | Project templates | Project Lambda zips | Project layer zips | Shared CDK provider zips (kept) | Other applications (kept) |
+| Region | Earlier rounds (2026-10-20) | Round 3, cycle 1 | Round 3, cycle 2 | Deleted | Left |
 |---|---|---|---|---|---|
-| us-west-2 | 10 | 4 | 8 | 2 | 0 |
-| us-east-1 | 2 | 4 | 2 | 3 | 17 |
+| us-west-2 | 32 | 0 | 0 | 32 | 0 |
+| us-east-1 | 8 | 13 | 7 | 28 | 0 |
 
-Deleting the 30 project object versions was **blocked by the local tool permission settings** in this
-session, so they were not deleted. Shared CDK provider assets are intentionally kept: they are
-content-addressed and may be referenced by other stacks.
+The 40 earlier object versions (us-west-2 32, us-east-1 8) are the ones listed as leftovers after round 2; they
+matched by asset hash (13 + 2 templates whose sha256 equals their key and whose Description is this stack's,
+plus every zip those templates reference from this project's functions, layer and agent package).
 
-Round-1 conclusion: 30 project object versions left in the two bootstrap buckets (superseded by the final
-conclusion below).
+**Conclusion: 已清理，无残留 / cleaned up, nothing left** - in us-east-1 and us-west-2, after the final cycle
+on `a8faf86`.
 
-## Round 2 - us-west-2 (current code)
-| Time | Event |
-|---|---|
-| 15:4x | Deploy of the reviewed code with the container path. The local container CLI switched to a desktop runtime that requires sign-in, and the image tag step failed; file assets and the template were published, no CloudFormation changes. Retried against the local runtime socket. |
-| 16:2x-16:36 | Stack creation; AgentCore Runtime, runtime resource policy, gateway policy engine and Cedar policy created. |
-| 16:34-17:07 | The ElastiCache Serverless cache went to `create-failed` with no event message; the same definition had created successfully in round 1 and did again in the next attempt (treated as transient). CloudFormation kept waiting on the resource. |
-| 17:07-17:20 | Deploy process stopped; `aws cloudformation delete-stack` on this stack; deleted, failed cache gone. |
-| 17:0x-17:20 | Agent switched to direct code deployment so that deploying needs no Docker or other container runtime (DECISIONS.md D26); runtime S3 read scoped to the one package object; lint, tests, eval and both synths re-run. Commit `c750355`. |
-| 17:21-17:28 | Preflight passed (no Docker check any more); deploy, 164 resources, `CREATE_COMPLETE`. Runtime created from the zip package. |
-| 17:32-17:36 | Seed; e2e 23/25, then 24/25 after fixing a test that read Memory once before indexing (commit `f55efdd`). See VERIFICATION.md. |
-| 17:37-17:47 | `npx aws-cdk@latest destroy -c config=config/sandbox.json --force`; stack deleted. |
-| 17:4x | Leftover check in us-west-2 and us-east-1 with `scripts/verify_cleanup.py`: 6 service-created log groups (2 AgentCore Runtime, 4 CDK provider Lambdas, from both round-2 stacks) deleted by name; 1 stale tag-index entry (subnet) verified not found, and the script now re-checks subnets and VPCs. Re-run: no leftovers. |
-| 17:5x | Agent image from the container attempt deleted from the bootstrap ECR repository (1 tag; repository now has no images). |
-
-Round-2 bootstrap S3 objects (us-west-2), classified by content as in round 1: 3 templates, 4 Lambda zips,
-2 layer zips, 1 agent package (10 versions). us-east-1: none from this project (new objects there belong to
-another application and were not touched). Deletion was not attempted again because it was blocked by the local
-tool permission settings in round 1.
-
-## Conclusion
-**仍有残留 / Leftovers remain:** 40 object versions of this project's CDK assets in the two CDK bootstrap S3
-buckets (us-west-2: 32, us-east-1: 8); they are listed by key and version id for the
-maintainer to delete. No other resource of this project remains in either Region: no stack, AgentCore resources,
-cache, IAM roles, log groups, tagged resources or ECR images.
+## Earlier rounds (2026-10-20, before the history rewrite)
+Round 1 (container image) and round 2 (direct code deployment) ran in us-west-2 after a first attempt in
+us-east-1 failed on the account's VPC quota (rolled back and deleted). Both were destroyed and checked; the only
+leftovers were the 40 bootstrap object versions above, which round 3 deleted. During round 1, a temporary
+inline policy used to narrow a missing IAM action was removed by CloudFormation together with its role. The
+stack name and prefix used then were renamed to `proto-nl` in the rewritten history.
