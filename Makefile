@@ -64,6 +64,7 @@ scan-ci:        ## secret scans: gitleaks canary + full history, detect-secrets 
 	uvx detect-secrets scan --exclude-files '(\.venv|\.build|cdk\.out|\.git|\.demo|\.deploy|uv\.lock)' \
 	  | python3 -c 'import json,sys; r=json.load(sys.stdin)["results"]; print("detect-secrets findings:", len(r)); sys.exit(1 if r else 0)'
 
-scan: scan-ci   ## local scans: plus workflow lint and dependency audit
+scan: scan-ci   ## local scans: plus workflow lint and dependency audit (lock file and the built agent package)
 	uvx zizmor --offline .github/workflows
-	osv-scanner scan source --lockfile uv.lock --lockfile src/agent/requirements.txt
+	uv run python scripts/agent_freeze.py
+	osv-scanner scan source --lockfile uv.lock --lockfile requirements.txt:.build/agent-freeze.txt

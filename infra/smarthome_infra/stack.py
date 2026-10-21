@@ -203,6 +203,9 @@ class NlControlStack(Stack):
         )
 
         # ------------------------------------------------------------- shared
+        # Stack-owned log group (with retention) for CDK's AwsCustomResource provider function, instead of
+        # the never-expiring group Lambda would create outside the stack.
+        self.provider_logs = self._log_group("CustomResourceProviderLogs")
         self.layer = lambda_.LayerVersion(
             self,
             "SharedLayer",
@@ -225,6 +228,7 @@ class NlControlStack(Stack):
                 resources=cr.AwsCustomResourcePolicy.ANY_RESOURCE
             ),
             install_latest_aws_sdk=False,
+            log_group=self.provider_logs,
         )
         iot_endpoint = "https://" + iot_ep.get_response_field("endpointAddress")
         topic_arn = f"arn:{Aws.PARTITION}:iot:{Aws.REGION}:{Aws.ACCOUNT_ID}:topic/{topic}"
@@ -702,6 +706,8 @@ class NlControlStack(Stack):
                 "AGENT_OBSERVABILITY_ENABLED": "true",
                 "OTEL_PYTHON_DISTRO": "aws_distro",
                 "OTEL_PYTHON_CONFIGURATOR": "aws_configurator",
+                # Keep prompts and model output out of the runtime's telemetry logs.
+                "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "false",
                 "MODEL_ID": model_id,
                 "MODEL_MAX_TOKENS": str(c["modelMaxTokens"]),
                 "MEMORY_ID": memory.attr_memory_id,
@@ -715,6 +721,43 @@ class NlControlStack(Stack):
         runtime.node.add_dependency(runtime_role)
         runtime.node.add_dependency(oauth_provider)
         runtime.node.add_dependency(target)
+
+        # AgentCore creates /aws/bedrock-agentcore/runtimes/<runtime id>-DEFAULT itself (never expires); a
+        # LogGroup resource with that name would collide. A custom resource sets the configured retention once
+        # the runtime exists and deletes the group on stack deletion.
+        runtime_log_group = f"/aws/bedrock-agentcore/runtimes/{runtime.attr_agent_runtime_id}-DEFAULT"
+        runtime_log_group_arn = (
+            f"arn:{Aws.PARTITION}:logs:{Aws.REGION}:{Aws.ACCOUNT_ID}:log-group:{runtime_log_group}"
+        )
+        retention_call = cr.AwsSdkCall(
+            service="CloudWatchLogs",
+            action="putRetentionPolicy",
+            parameters={"logGroupName": runtime_log_group, "retentionInDays": int(c["logRetentionDays"])},
+            physical_resource_id=cr.PhysicalResourceId.of(runtime_log_group),
+        )
+        runtime_logs = cr.AwsCustomResource(
+            self,
+            "RuntimeLogRetention",
+            on_create=retention_call,
+            on_update=retention_call,
+            on_delete=cr.AwsSdkCall(
+                service="CloudWatchLogs",
+                action="deleteLogGroup",
+                parameters={"logGroupName": runtime_log_group},
+                ignore_error_codes_matching="ResourceNotFoundException",
+            ),
+            policy=cr.AwsCustomResourcePolicy.from_statements(
+                [
+                    iam.PolicyStatement(
+                        actions=["logs:PutRetentionPolicy", "logs:DeleteLogGroup"],
+                        resources=[runtime_log_group_arn, f"{runtime_log_group_arn}:*"],
+                    )
+                ]
+            ),
+            install_latest_aws_sdk=False,
+            log_group=self.provider_logs,
+        )
+        runtime_logs.node.add_dependency(runtime)
 
         # ------------------------------------------------------- orchestrator
         orch_fn = self._function(

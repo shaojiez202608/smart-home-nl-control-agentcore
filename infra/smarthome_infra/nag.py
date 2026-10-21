@@ -102,6 +102,13 @@ def acknowledgements(stack: Stack, cfg: dict[str, Any], base_model: str) -> dict
         ],
         # CDK's singleton provider function for AwsCustomResource (IoT data endpoint lookup).
         "AWS679f53fac002430cb0da5b7982bd2287/ServiceRole": [BASIC_EXEC],
+        "RuntimeLogRetention/CustomResourcePolicy": [
+            (
+                f"{P}IAM5[Resource::arn:<AWS::Partition>:logs:<AWS::Region>:<AWS::AccountId>:log-group:/aws/bedrock-agentcore/runtimes/<Runtime.AgentRuntimeId>-DEFAULT:*]",
+                "The ':*' form of this one runtime log group's ARN, required by CloudWatch Logs for "
+                "PutRetentionPolicy / DeleteLogGroup.",
+            )
+        ],
         "IotDataEndpoint/CustomResourcePolicy": [
             (f"{P}IAM5[Resource::*]", "iot:DescribeEndpoint does not support resource-level permissions.")
         ],

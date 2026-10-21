@@ -31,6 +31,12 @@ agent = [
 ]
 
 [tool.uv]
+# Supply-chain cooldown: do not resolve package versions published in the last 7 days.
+exclude-newer = "7 days"
+# The cooldown also applies to `uv pip install` in infra/smarthome_infra/build.py (Lambda layer, agent package).
+# Exceptions: strands-agents, bedrock-agentcore, boto3 and botocore are pinned, deployed and tested in this round (VERIFICATION.md);
+# certifi carries the fix for PYSEC-2026-4320 (osv-scanner). Review them on the next update.
+exclude-newer-package = { strands-agents = "2026-10-21T00:00:00Z", certifi = "2026-10-21T00:00:00Z", boto3 = "2026-10-21T00:00:00Z", botocore = "2026-10-21T00:00:00Z", bedrock-agentcore = "2026-10-21T00:00:00Z" }
 package = false
 default-groups = ["dev", "infra", "agent"]
 

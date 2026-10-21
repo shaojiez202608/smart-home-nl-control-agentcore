@@ -1,10 +1,11 @@
 ## What and why
 
 ## How it was verified
-- [ ] `make lint test eval` passed
+- [ ] `make lint test eval` passed (mock evaluation and negative control)
 - [ ] `make synth` passed with no unacknowledged cdk-nag findings (new acknowledgements have written reasons)
 - [ ] Changes to validation, policy, ambiguity or memory rules have unit tests and evaluation cases
-- [ ] Deployed and ran `make e2e` (state the Region and commit), or explain why not
+- [ ] Deployed and ran `ALLOW_PAID=1 make verify`, then `make destroy` and `make verify-cleanup` (state the Region and commit), or explain why not
+- [ ] `make scan-ci` passed (gitleaks canary and history, detect-secrets)
 
 ## What was not tested
 

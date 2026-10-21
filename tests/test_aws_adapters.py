@@ -50,10 +50,25 @@ def test_upsert_overwrites_previous_record(store):
                         "memoryStrategyId": "s",
                         "namespaces": [ns],
                         "createdAt": "2026-01-01T00:00:00Z",
-                    }
+                        "metadata": {
+                            "deviceUuid": {"stringValue": "dev-master-light"},
+                            "attribute": {"stringValue": "brightness"},
+                        },
+                    },
+                    {
+                        "memoryRecordId": "mem-" + "c" * 40,
+                        "content": {"text": "another device"},
+                        "memoryStrategyId": "s",
+                        "namespaces": [ns],
+                        "createdAt": "2026-01-01T00:00:00Z",
+                        "metadata": {
+                            "deviceUuid": {"stringValue": "dev-living-light"},
+                            "attribute": {"stringValue": "brightness"},
+                        },
+                    },
                 ]
             },
-            {"memoryId": "mem-test-000001", "namespace": ns, "maxResults": 100, "metadataFilters": ANY},
+            {"memoryId": "mem-test-000001", "namespace": ns, "maxResults": 100},
         )
         # Create first, then delete the superseded record: a failed create keeps the old preference.
         stub.add_response(
@@ -80,7 +95,7 @@ def test_upsert_without_existing_record_only_creates(store):
         stub.add_response(
             "list_memory_records",
             {"memoryRecordSummaries": []},
-            {"memoryId": "mem-test-000001", "namespace": ns, "maxResults": 100, "metadataFilters": ANY},
+            {"memoryId": "mem-test-000001", "namespace": ns, "maxResults": 100},
         )
         stub.add_response(
             "batch_create_memory_records",
@@ -128,7 +143,7 @@ def test_failed_records_in_a_batch_create_raise(store):
         stub.add_response(
             "list_memory_records",
             {"memoryRecordSummaries": []},
-            {"memoryId": "mem-test-000001", "namespace": ns, "maxResults": 100, "metadataFilters": ANY},
+            {"memoryId": "mem-test-000001", "namespace": ns, "maxResults": 100},
         )
         stub.add_response(
             "batch_create_memory_records",

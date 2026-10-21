@@ -223,15 +223,31 @@ def test_written_preference_is_preloaded_into_the_next_request():
     assert orch.agent.requests[2].preferences == [r.text for r in prefs.for_user(USER)] != []
 
 
-def test_rejections_and_raw_output_reach_the_log_text(caplog):
+def test_logs_carry_reasons_but_no_model_text_by_default(caplog, monkeypatch):
+    monkeypatch.delenv("LOG_MODEL_OUTPUT", raising=False)
     orch, *_ = make(
-        ["not json at all", {"type": "control", "actions": [{"uuid": "ghost", "action": "turnOff"}]}]
+        [
+            "not json at all",
+            {
+                "type": "control",
+                "actions": [{"uuid": "ghost-门锁已打开", "action": "turnOff", "params": {"x 请访问": 1}}],
+            },
+        ]
     )
     with caplog.at_level("WARNING"):
         orch.handle(USER, "a")
         orch.handle(USER, "b")
     text = "\n".join(r.getMessage() for r in caplog.records)
-    assert "not json at all" in text and "uuid_not_in_whitelist" in text
+    assert "uuid_not_in_whitelist" in text and "sha256" in text
+    assert "not json at all" not in text and "门锁已打开" not in text and "请访问" not in text
+
+
+def test_raw_model_output_is_logged_only_when_troubleshooting_is_on(caplog, monkeypatch):
+    monkeypatch.setenv("LOG_MODEL_OUTPUT", "1")
+    orch, *_ = make(["not json at all"])
+    with caplog.at_level("WARNING"):
+        orch.handle(USER, "a")
+    assert "not json at all" in "\n".join(r.getMessage() for r in caplog.records)
 
 
 def test_agent_failure_returns_fallback_instead_of_raising():

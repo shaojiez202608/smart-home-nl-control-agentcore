@@ -51,7 +51,9 @@ def make_status_tool(whitelist: set[str], lookup: StatusLookup, stats: dict[str,
             return json.dumps(lookup(uuid), ensure_ascii=False)
         except Exception as exc:  # surface a readable failure to the model
             stats["errors"] = stats.get("errors", 0) + 1
-            log.warning("status_lookup_failed", extra={"uuid": uuid, "error": str(exc)})
+            log.warning(
+                "status_lookup_failed %s", json.dumps({"error": type(exc).__name__, "detail": str(exc)[:300]})
+            )
             return json.dumps({"error": "status unavailable"})
 
     return query_device_status

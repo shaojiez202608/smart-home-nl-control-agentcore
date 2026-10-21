@@ -79,21 +79,14 @@ class AgentCoreMemoryStore:
         """Create the new record first, then delete the superseded ones (a failed create keeps the old)."""
         ns = preferences_namespace(user_id)
         for rec in records:
-            existing = self._list(
-                ns,
-                metadataFilters=[
-                    {
-                        "left": {"metadataKey": "deviceUuid"},
-                        "operator": "EQUALS_TO",
-                        "right": {"metadataValue": {"stringValue": rec.device_uuid}},
-                    },
-                    {
-                        "left": {"metadataKey": "attribute"},
-                        "operator": "EQUALS_TO",
-                        "right": {"metadataValue": {"stringValue": rec.attribute}},
-                    },
-                ],
-            )
+            # The unfiltered namespace listing is used and filtered here: in testing, listings with
+            # metadataFilters lagged behind new records for longer than plain listings, so superseded
+            # records were never found and deleted.
+            existing = [
+                r
+                for r in self._list(ns)
+                if _meta(r, "deviceUuid") == rec.device_uuid and _meta(r, "attribute") == rec.attribute
+            ]
             created = self.client.batch_create_memory_records(
                 memoryId=self.memory_id,
                 records=[

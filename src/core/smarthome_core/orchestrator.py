@@ -20,6 +20,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import secrets
 import time
 import uuid as uuidlib
@@ -215,14 +216,17 @@ class Orchestrator:
             )
             plan = Plan.from_json(raw)
         except PlanParseError as exc:
-            # Raw model output goes to troubleshooting logs only.
-            log.warning(
-                "plan_parse_failed %s",
-                json.dumps(
-                    {"request_id": request_id, "error": str(exc), "raw": raw[:2000]}, ensure_ascii=False
-                ),
-                extra={"request_id": request_id, "error": str(exc), "raw": raw[:2000]},
-            )
+            # Model output never reaches the user. Logs carry only its size and hash unless troubleshooting
+            # is switched on (LOG_MODEL_OUTPUT=1), in which case a bounded excerpt is logged (FR-6).
+            detail = {
+                "request_id": request_id,
+                "error": str(exc)[:200],
+                "chars": len(raw),
+                "sha256": hashlib.sha256(raw.encode()).hexdigest()[:16],
+            }
+            if os.environ.get("LOG_MODEL_OUTPUT") == "1":
+                detail["raw"] = raw[:2000]
+            log.warning("plan_parse_failed %s", json.dumps(detail, ensure_ascii=False))
             return self._fail(request_id, "PlanParseFailure", t, t0)
         except Exception as exc:  # runtime or model failure: answer with the fallback, never a 5xx
             log.exception(
@@ -297,7 +301,11 @@ class Orchestrator:
     ) -> OrchestratorResponse:
         outcome = validate_plan(plan, whitelist)
         if outcome.rejected:
-            rejected = [asdict(r) for r in outcome.rejected]
+            # Only check keywords and whether the uuid is a known device: model-written values stay out of logs.
+            rejected = [
+                {"reason": r.reason.split(":")[0], "known_device": r.uuid in whitelist}
+                for r in outcome.rejected
+            ]
             log.warning(
                 "plan_actions_rejected %s",
                 json.dumps({"request_id": request_id, "rejected": rejected}, ensure_ascii=False),

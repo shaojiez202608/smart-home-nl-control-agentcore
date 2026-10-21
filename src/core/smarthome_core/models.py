@@ -78,7 +78,7 @@ class Plan:
             raise PlanParseError("plan must be a JSON object")
         ptype = d.get("type")
         if ptype not in PLAN_TYPES:
-            raise PlanParseError(f"unknown plan type: {ptype!r}")
+            raise PlanParseError("unknown plan type")
         try:
             actions = [
                 PlannedAction(
@@ -103,7 +103,7 @@ class Plan:
                 AliasUpdate(uuid=str(alias_raw["uuid"]), alias=str(alias_raw["alias"])) if alias_raw else None
             )
         except (KeyError, TypeError, ValueError, AttributeError) as exc:
-            raise PlanParseError(f"malformed plan: {exc}") from exc
+            raise PlanParseError(f"malformed plan: {type(exc).__name__}") from exc
         return cls(
             type=ptype,
             actions=actions,
@@ -118,7 +118,7 @@ class Plan:
             # NaN / Infinity are not JSON and 1e999 overflows to inf; Python's parser accepts both by default.
             return cls.from_dict(json.loads(raw, parse_constant=_reject_constant, parse_float=_finite_float))
         except (json.JSONDecodeError, RecursionError) as exc:
-            raise PlanParseError(f"invalid JSON: {exc}") from exc
+            raise PlanParseError(f"invalid JSON at position {getattr(exc, 'pos', '?')}") from exc
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

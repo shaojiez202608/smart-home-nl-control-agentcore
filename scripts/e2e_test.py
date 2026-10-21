@@ -58,12 +58,19 @@ def preference_records(
     ]
     deadline, records = time.time() + wait, []
     while True:
-        records = mem.list_memory_records(
-            memoryId=out["MemoryId"],
-            namespace=f"/members/{sub}/preferences/",
-            metadataFilters=flt,
-            maxResults=20,
+        # Plain listing filtered here (filtered listings lagged in testing, see memory_store.upsert).
+        listed = mem.list_memory_records(
+            memoryId=out["MemoryId"], namespace=f"/members/{sub}/preferences/", maxResults=100
         ).get("memoryRecordSummaries", [])
+        records = [
+            r
+            for r in listed
+            if all(
+                ((r.get("metadata") or {}).get(f["left"]["metadataKey"]) or {}).get("stringValue")
+                == f["right"]["metadataValue"]["stringValue"]
+                for f in flt
+            )
+        ]
         if time.time() >= deadline or (
             _newest_value(records) == "40" and (len(records) == 1 or not only_one)
         ):
