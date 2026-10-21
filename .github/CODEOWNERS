@@ -1,0 +1,12 @@
+# Changes to CI, scanning configuration, AI-assistant configuration, cdk-nag acknowledgements and the
+# deploy/cleanup scripts need the maintainer's review.
+/.github/                     @shaojiez202608
+/.gitleaks.toml               @shaojiez202608
+/.pre-commit-config.yaml      @shaojiez202608
+/Makefile                     @shaojiez202608
+/AGENTS.md                    @shaojiez202608
+/CLAUDE.md                    @shaojiez202608
+/infra/smarthome_infra/nag.py @shaojiez202608
+/scripts/deploy.sh            @shaojiez202608
+/scripts/cleanup.sh           @shaojiez202608
+/scripts/secret_canary.sh     @shaojiez202608

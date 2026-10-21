@@ -1,0 +1,55 @@
+# Manual deployment check in a sandbox account: preflight + guarded deploy, seed, end-to-end checks,
+# destroy, leftover check. Runs only on demand, behind the "sandbox" environment (configure required
+# reviewers on it), with short-lived OIDC credentials. Incurs AWS charges (Bedrock, AgentCore, NAT, cache).
+name: deploy-verify
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One sandbox deployment at a time; never cancel a run half-way (it would skip the destroy step).
+concurrency:
+  group: deploy-verify-sandbox
+  cancel-in-progress: false
+
+jobs:
+  deploy-verify-destroy:
+    name: Deploy, verify, destroy, leftover check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    environment: sandbox
+    permissions:
+      contents: read   # checkout
+      id-token: write  # OIDC token for configure-aws-credentials (no stored keys)
+    env:
+      AWS_REGION: us-east-1
+      ALLOW_PAID: "1"
+      CONFIRM_ACCOUNT: ${{ vars.SANDBOX_ACCOUNT_LAST4 }}
+      CONFIRM_STACK: proto-nl-sandbox
+      CONFIRM_DATA: "yes"
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@e92bafb6253dcd438e0484186d7669ea7a8ca1cc # v6.4.3
+        with:
+          enable-cache: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: arn:aws:iam::111122223333:role/<DEPLOY_VERIFY_ROLE_NAME>
+          aws-region: us-east-1
+      - run: make init
+      - run: make deploy
+      - run: make seed
+      - run: make verify
+      - name: Destroy (always)
+        if: always()
+        run: make destroy
+      - name: Leftover check (fails on leftovers)
+        if: always()
+        run: make verify-cleanup
