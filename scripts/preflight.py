@@ -174,6 +174,13 @@ def main() -> int:
         except ClientError:
             info(f"could not read the {what} quota; {used} in use")
             return
+        if used > limit:
+            # Usage above the reported value means the account has a higher effective limit than
+            # Service Quotas reports; headroom cannot be judged, so this is not a blocker.
+            info(
+                f"{what}: {used} in use, reported quota {int(limit)} (below usage; headroom unknown), need {need}"
+            )
+            return
         (ok if used + need <= limit else problem)(f"{what}: {used} in use, quota {int(limit)}, need {need}")
 
     vpcs = sum(len(p["Vpcs"]) for p in ec2.get_paginator("describe_vpcs").paginate())
