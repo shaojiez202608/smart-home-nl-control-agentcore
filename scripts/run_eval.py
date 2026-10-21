@@ -1,7 +1,8 @@
 """Run the synthetic evaluation set against the full application pipeline.
 
-    uv run python scripts/run_eval.py                  # mock model (deterministic, offline)
-    uv run python scripts/run_eval.py --agent bedrock  # real model via Amazon Bedrock
+    uv run python scripts/run_eval.py                     # mock model (deterministic, offline)
+    uv run python scripts/run_eval.py --negative-control  # a deliberately wrong planner must fail
+    ALLOW_PAID=1 uv run python scripts/run_eval.py --agent bedrock  # real model (Amazon Bedrock charges)
 
 Each case starts from a fresh synthetic home. The script prints a pass rate
 and the details of every failed check, and writes a JSON report.
@@ -11,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -19,11 +21,12 @@ ROOT = Path(__file__).resolve().parent.parent
 for p in ("src/core", "src/agent", "."):
     sys.path.insert(0, str(ROOT / p))
 
+from smarthome_core.memory_policy import PreferenceRecord  # noqa: E402
 from smarthome_core.messages import FALLBACK_REPLY  # noqa: E402
+from smarthome_core.models import Device  # noqa: E402
 from smarthome_core.orchestrator import Orchestrator  # noqa: E402
 
-from local.fakes import FakePlatform, FakePreferenceStore, MemoryCache, ScriptedAgent  # noqa: E402
-from local.run_local import LocalBedrockAgent  # noqa: E402
+from local.fakes import FakePlatform, FakePreferenceStore, MemoryCache, ScriptedAgent, sample_home  # noqa: E402
 
 CASES = ROOT / "sample-data" / "eval" / "cases.json"
 
@@ -52,12 +55,34 @@ class RecordingLog:
         return out
 
 
+class SloppyAgent:
+    """Negative control: obeys the user literally and ignores every rule (unlocks, picks the first
+    same-named device, writes free text). A sensitive evaluation must report failures for it."""
+
+    def plan(self, request):
+        devs = request.devices
+        actions = [
+            {"uuid": d["uuid"], "action": "unlock" if d["type"] == "lock" else "turnOn"} for d in devs[:3]
+        ]
+        actions += [{"uuid": d["uuid"], "action": "unlock"} for d in devs if d["type"] == "lock"]
+        return json.dumps(
+            {"type": "control", "actions": actions, "message": "已经全部帮你完成"}, ensure_ascii=False
+        )
+
+
 def run_case(case: dict, agent_kind: str) -> tuple[list[str], dict]:
-    platform = FakePlatform()
+    devices = sample_home() + [Device.from_dict(x) for x in case.get("extra_devices", [])]
+    platform = FakePlatform(devices)
     prefs = FakePreferenceStore()
+    if case.get("setup_preferences"):
+        prefs.upsert("eval-user", [PreferenceRecord(**r) for r in case["setup_preferences"]])
     if agent_kind == "mock":
         agent = ScriptedAgent([case["model_output"]])
+    elif agent_kind == "sloppy":
+        agent = SloppyAgent()
     else:
+        from local.run_local import LocalBedrockAgent
+
         agent = LocalBedrockAgent(platform, prefs)
     orch = Orchestrator(
         cache=MemoryCache(), directory=platform, agent=agent, dispatcher=platform, preferences=prefs
@@ -91,6 +116,12 @@ def run_case(case: dict, agent_kind: str) -> tuple[list[str], dict]:
     for reason in exp.get("rejected_include", []):
         if not any(reason in r for r in log.rejection_reasons()):
             fails.append(f"expected rejection containing {reason!r}, got {log.rejection_reasons()}")
+    if "skipped_exact" in exp and sorted(skipped) != sorted(exp["skipped_exact"]):
+        fails.append(f"skipped: expected {exp['skipped_exact']}, got {skipped}")
+    body = json.dumps(resp.to_dict(), ensure_ascii=False)
+    for text in exp.get("response_excludes", []):
+        if text in body:
+            fails.append(f"model-written text {text!r} leaked into the response")
     if "preferences_written" in exp and len(prefs.records) != exp["preferences_written"]:
         fails.append(f"preferences written: expected {exp['preferences_written']}, got {len(prefs.records)}")
     if exp.get("message_is_fallback") and resp.message != FALLBACK_REPLY:
@@ -116,14 +147,25 @@ def run_case(case: dict, agent_kind: str) -> tuple[list[str], dict]:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--agent", choices=["mock", "bedrock"], default="mock")
-    ap.add_argument("--report", default=str(ROOT / ".build" / "eval-report.json"))
+    ap.add_argument(
+        "--negative-control",
+        action="store_true",
+        help="run a deliberately wrong planner; exits 0 only if the evaluation reports failures",
+    )
+    ap.add_argument("--report", default=None)
     args = ap.parse_args()
-    cases = json.loads(CASES.read_text(encoding="utf-8"))["cases"]
-    if args.agent != "mock":
+    if args.agent == "bedrock" and os.environ.get("ALLOW_PAID") != "1":
+        sys.exit("--agent bedrock invokes Amazon Bedrock models (charges apply). Re-run with ALLOW_PAID=1.")
+    agent = "sloppy" if args.negative_control else args.agent
+    report = args.report or str(ROOT / ".build" / f"eval-report-{agent}.json")
+    data = json.loads(CASES.read_text(encoding="utf-8"))
+    cases = data["cases"]
+    print(f"evaluation set version {data.get('version', 'unversioned')}, {len(cases)} cases")
+    if agent != "mock":
         cases = [c for c in cases if not c.get("mock_only")]
     results = []
     for case in cases:
-        fails, observed = run_case(case, args.agent)
+        fails, observed = run_case(case, agent)
         results.append(
             {
                 "id": case["id"],
@@ -137,16 +179,30 @@ def main() -> int:
         for f in fails:
             print(f"      - {f}")
     passed = sum(r["passed"] for r in results)
-    print(f"\n{passed}/{len(results)} passed ({passed / len(results):.0%}) with --agent {args.agent}")
-    Path(args.report).parent.mkdir(parents=True, exist_ok=True)
-    Path(args.report).write_text(
+    print(f"\n{passed}/{len(results)} passed ({passed / len(results):.0%}) with agent {agent}")
+    Path(report).parent.mkdir(parents=True, exist_ok=True)
+    Path(report).write_text(
         json.dumps(
-            {"agent": args.agent, "passed": passed, "total": len(results), "results": results},
+            {
+                "agent": agent,
+                "set_version": data.get("version"),
+                "passed": passed,
+                "total": len(results),
+                "results": results,
+            },
             ensure_ascii=False,
             indent=2,
         ),
         encoding="utf-8",
     )
+    if args.negative_control:
+        failed = len(results) - passed
+        print(
+            f"negative control: {failed} cases failed as expected"
+            if failed
+            else "negative control NOT detected"
+        )
+        return 0 if failed else 1
     return 0 if passed == len(results) else 1
 
 

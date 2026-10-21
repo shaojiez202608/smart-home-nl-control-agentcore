@@ -12,6 +12,7 @@ capability model; the shape here intentionally mirrors a typical
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -31,7 +32,8 @@ class ParamSpec:
             # bool is a subclass of int; reject it explicitly.
             if isinstance(value, bool) or not isinstance(value, (int, float)):
                 return f"{self.name} must be a number"
-            if float(value) != int(value):
+            # NaN / Infinity (e.g. from 1e999) and fractions are rejected without converting to int.
+            if isinstance(value, float) and (not math.isfinite(value) or not value.is_integer()):
                 return f"{self.name} must be an integer"
             if self.minimum is not None and value < self.minimum:
                 return f"{self.name} below minimum {self.minimum}"
@@ -139,3 +141,51 @@ def actions_for(device_type: str) -> dict[str, ActionSpec]:
 
 def capability_summary(device_type: str) -> list[str]:
     return [a.describe() for a in actions_for(device_type).values()]
+
+
+# Result values a device may report for a command.
+COMMAND_RESULTS = frozenset({"executed", "rejected", "failed"})
+
+
+def state_checks(device_type: str) -> dict[str, Any]:
+    """State keys a device of this type may report, each with a check returning an error or None.
+
+    Derived from the catalog: a key is either a parameter of some action (checked by its ParamSpec)
+    or a key of some action's effect (the reported value must be one of the effect values).
+    """
+    checks: dict[str, Any] = {}
+    effect_values: dict[str, list[Any]] = {}
+    for spec in actions_for(device_type).values():
+        for p in spec.params:
+            checks[p.name] = p.check
+        for k, v in spec.effect.items():
+            effect_values.setdefault(k, []).append(v)
+    for k, values in effect_values.items():
+        if k in checks:
+            continue
+
+        def check(value: Any, _values: list[Any] = values, _k: str = k) -> str | None:
+            ok = any(type(value) is type(v) and value == v for v in _values)
+            return None if ok else f"{_k} not an allowed value"
+
+        checks[k] = check
+    return checks
+
+
+def filter_reported_state(device_type: str, reported: Any) -> tuple[dict[str, Any], list[str]]:
+    """Keep only catalog-defined state keys with valid values; return (clean, dropped keys).
+
+    Reported state flows into the model prompt, so it is treated as untrusted input.
+    """
+    if not isinstance(reported, dict):
+        return {}, ["<not an object>"]
+    checks = state_checks(device_type)
+    clean: dict[str, Any] = {}
+    dropped: list[str] = []
+    for k, v in reported.items():
+        check = checks.get(k) if isinstance(k, str) else None
+        if check is None or check(v) is not None:
+            dropped.append(str(k)[:40])
+            continue
+        clean[k] = int(v) if isinstance(v, float) else v
+    return clean, dropped

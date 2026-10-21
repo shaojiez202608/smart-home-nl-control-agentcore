@@ -1,5 +1,5 @@
 import pytest
-from smarthome_core.models import Plan, PlanParseError
+from smarthome_core.models import Device, Plan, PlanParseError
 from smarthome_core.policy import apply_policy
 from smarthome_core.validation import MAX_ACTIONS_PER_REQUEST, validate_plan
 
@@ -72,13 +72,12 @@ def test_duplicates_collapse(wl):
     assert len(out.actions) == 1
 
 
-def test_action_cap(wl):
-    many = [
-        {"uuid": "dev-living-light", "action": "setBrightness", "params": {"brightness": i}}
-        for i in range(1, 40)
-    ]
-    out = validate_plan(plan(*many), wl)
+def test_action_cap():
+    lights = {f"l{i}": Device(f"l{i}", f"灯{i}", "客厅", "light") for i in range(40)}
+    many = [{"uuid": u, "action": "turnOn"} for u in lights]
+    out = validate_plan(plan(*many), lights)
     assert len(out.actions) == MAX_ACTIONS_PER_REQUEST
+    assert sum(r.reason == "too_many_actions" for r in out.rejected) == 20
 
 
 def test_skipped_only_keeps_known_devices(wl):

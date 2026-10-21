@@ -40,6 +40,12 @@ class MemoryCache:
     def set_json(self, key: str, value: Any, ttl_seconds: int) -> None:
         self._data[key] = (time.time() + ttl_seconds, json.dumps(value, ensure_ascii=False))
 
+    def add_json(self, key: str, value: Any, ttl_seconds: int) -> bool:
+        if self._alive(key) is not None:
+            return False
+        self.set_json(key, value, ttl_seconds)
+        return True
+
     def pop_json(self, key: str) -> Any | None:
         val = self.get_json(key)
         self._data.pop(key, None)
@@ -86,6 +92,9 @@ class FakePreferenceStore:
         for r in records:
             self.records[(user_id, r.device_uuid, r.attribute)] = r  # overwrite, not append
 
+    def list_records(self, user_id: str) -> list[PreferenceRecord]:
+        return self.for_user(user_id)
+
     def list_texts(self, user_id: str) -> list[str]:
         return [r.text for r in self.for_user(user_id)]
 
@@ -125,7 +134,7 @@ class RuleBasedAgent:
                     actions.append({"uuid": d["uuid"], "action": "close"})
                 elif d["type"] == "lock":
                     if d["state"].get("locked"):
-                        skipped.append({"uuid": d["uuid"], "reason": "已经锁好"})
+                        skipped.append({"uuid": d["uuid"], "reason": "already_in_state"})
                     else:
                         actions.append({"uuid": d["uuid"], "action": "lock"})
             return json.dumps({"type": "control", "actions": actions, "skipped": skipped})

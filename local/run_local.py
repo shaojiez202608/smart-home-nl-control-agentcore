@@ -1,7 +1,7 @@
 """Run the full request pipeline on your machine.
 
     uv run python -m local.run_local "我要睡觉了"                 # offline, rule-based planner
-    uv run python -m local.run_local --agent bedrock "我要睡觉了" # real model via Amazon Bedrock
+    ALLOW_PAID=1 uv run python -m local.run_local --agent bedrock "我要睡觉了"  # real model (charges)
 
 Offline mode needs no AWS access. Bedrock mode uses your local AWS
 credentials to call the model directly (no AgentCore Runtime, Memory or
@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -64,6 +65,8 @@ def main() -> None:
     ap.add_argument("--agent", choices=["mock", "bedrock"], default="mock")
     ap.add_argument("--channel", choices=["app", "speaker"], default="app")
     args = ap.parse_args()
+    if args.agent == "bedrock" and os.environ.get("ALLOW_PAID") != "1":
+        sys.exit("--agent bedrock invokes Amazon Bedrock models (charges apply). Re-run with ALLOW_PAID=1.")
     orch, platform, prefs = build(args.agent)
     for u in args.utterances:
         resp = orch.handle("local-user", u, channel=args.channel)

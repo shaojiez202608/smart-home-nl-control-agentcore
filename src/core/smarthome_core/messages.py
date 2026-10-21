@@ -17,7 +17,16 @@ from .catalog import actions_for
 from .models import Device, DispatchResult, PlannedAction, SkippedDevice
 
 FALLBACK_REPLY = "抱歉，这句话我没能理解，请换个说法再试一次。"
+UNAVAILABLE_REPLY = "抱歉，服务暂时不可用，请稍后再试。"
 NOTHING_TO_DO_REPLY = "没有需要操作的设备。"
+
+# Fixed reply text per skip reason code (models.SKIP_REASONS). The model only chooses the code.
+SKIP_REASON_TEXT = {
+    "already_in_state": "已是目标状态",
+    "sensitive_action": "涉及安全的操作不会自动执行",
+    "not_needed": "本次不需要调整",
+    "other": "",
+}
 
 _ACTION_VERBS = {
     "turnOn": "打开",
@@ -92,7 +101,8 @@ def control_reply(
             "出于安全考虑，以下操作不会执行：" + _join(describe_action(dev(a.uuid), a) for a in denied)
         )
     for s in skipped:
-        sentences.append(f"{dev(s.uuid).name}保持当前状态（{s.reason}）")
+        why = SKIP_REASON_TEXT.get(s.reason, "")
+        sentences.append(f"{dev(s.uuid).name}保持当前状态" + (f"（{why}）" if why else ""))
     if conflicts:
         sentences.append(
             "对" + _join(dev(u).name for u in conflicts) + "的要求互相矛盾，请再说明一下想怎么操作"

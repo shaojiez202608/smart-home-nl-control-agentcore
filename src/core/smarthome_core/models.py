@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
 PLAN_TYPES = ("control", "query", "clarify", "chat", "alias")
 PARAM_SOURCES = ("user", "preference", "default")
+# Why the model left a device untouched. The model picks a code; the text shown to the user is a
+# fixed string per code (messages.py), so model-written prose never reaches the reply.
+SKIP_REASONS = ("already_in_state", "sensitive_action", "not_needed", "other")
 
 
 @dataclass
@@ -46,7 +50,7 @@ class PlannedAction:
 @dataclass
 class SkippedDevice:
     uuid: str
-    reason: str
+    reason: str  # one of SKIP_REASONS once parsed by Plan.from_dict
     name: str = ""
 
 
@@ -90,7 +94,7 @@ class Plan:
             ]
             skipped = [
                 SkippedDevice(
-                    uuid=str(s["uuid"]), reason=str(s.get("reason", "")), name=str(s.get("name") or "")
+                    uuid=str(s["uuid"]), reason=skip_reason(s.get("reason")), name=str(s.get("name") or "")
                 )
                 for s in d.get("skipped") or []
             ]
@@ -111,8 +115,9 @@ class Plan:
     @classmethod
     def from_json(cls, raw: str) -> Plan:
         try:
-            return cls.from_dict(json.loads(raw))
-        except json.JSONDecodeError as exc:
+            # NaN / Infinity are not JSON and 1e999 overflows to inf; Python's parser accepts both by default.
+            return cls.from_dict(json.loads(raw, parse_constant=_reject_constant, parse_float=_finite_float))
+        except (json.JSONDecodeError, RecursionError) as exc:
             raise PlanParseError(f"invalid JSON: {exc}") from exc
 
     def to_dict(self) -> dict[str, Any]:
@@ -121,6 +126,22 @@ class Plan:
 
 class PlanParseError(ValueError):
     """The model output could not be interpreted as a Plan."""
+
+
+def _reject_constant(name: str) -> Any:
+    raise PlanParseError(f"non-finite number {name} in model output")
+
+
+def _finite_float(text: str) -> float:
+    value = float(text)
+    if not math.isfinite(value):
+        raise PlanParseError("number out of range in model output")
+    return value
+
+
+def skip_reason(raw: Any) -> str:
+    """Map whatever the model wrote to a fixed reason code; free text becomes "other"."""
+    return raw if isinstance(raw, str) and raw in SKIP_REASONS else "other"
 
 
 @dataclass

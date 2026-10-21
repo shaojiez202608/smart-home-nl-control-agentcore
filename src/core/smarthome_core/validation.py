@@ -8,8 +8,10 @@ anything is sent to a device. The checks are:
 3. every parameter is known, well-typed and within bounds, and every
    required parameter is present;
 4. duplicate actions on one device are collapsed; contradictory actions on
-   one device (e.g. lock + unlock) cancel each other and trigger a
-   clarification instead of guessing;
+   one device cancel each other and trigger a clarification instead of
+   guessing. Two actions contradict when they would set the same state key to
+   different values (lock + unlock, turnOff + setBrightness, open +
+   setPosition 50, two different brightness values);
 5. the number of actions per request is capped.
 
 Rejected items are returned with reasons for logging and metrics. They are
@@ -21,7 +23,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from .catalog import actions_for
-from .models import Device, Plan, PlannedAction, SkippedDevice
+from .models import Device, Plan, PlannedAction, SkippedDevice, skip_reason
 
 MAX_ACTIONS_PER_REQUEST = 20
 
@@ -33,13 +35,20 @@ _TURN_ON_WITH_VALUE = {
     ("air_conditioner", "celsius"): "setTemperature",
 }
 
-# Pairs of actions that contradict each other when requested together.
-_OPPOSITES = {
-    frozenset({"turnOn", "turnOff"}),
-    frozenset({"open", "close"}),
-    frozenset({"lock", "unlock"}),
-    frozenset({"play", "pause"}),
-}
+
+def _target_state(device_type: str, act: PlannedAction) -> dict:
+    spec = actions_for(device_type)[act.action]
+    return {**spec.effect, **act.params}
+
+
+def _contradictory(device_type: str, acts: list[PlannedAction]) -> bool:
+    seen: dict[str, object] = {}
+    for a in acts:
+        for k, v in _target_state(device_type, a).items():
+            if k in seen and seen[k] != v:
+                return True
+            seen[k] = v
+    return False
 
 
 @dataclass
@@ -83,11 +92,7 @@ def validate_plan(plan: Plan, whitelist: dict[str, Device]) -> ValidationOutcome
         if missing:
             out.rejected.append(Rejection(act.uuid, act.action, f"missing_params:{sorted(missing)}"))
             continue
-        # Models sometimes emit integers as strings ("30"); accept plain digit strings only.
-        act.params = {
-            k: int(v) if allowed[k].type == "int" and isinstance(v, str) and v.strip().isdigit() else v
-            for k, v in act.params.items()
-        }
+        act.params = {k: _digits_to_int(v) if allowed[k].type == "int" else v for k, v in act.params.items()}
         errors = [e for p in spec.params if (e := p.check(act.params[p.name]))]
         if errors:
             out.rejected.append(Rejection(act.uuid, act.action, "; ".join(errors)))
@@ -99,8 +104,7 @@ def validate_plan(plan: Plan, whitelist: dict[str, Device]) -> ValidationOutcome
         )
 
     for uuid, acts in by_device.items():
-        names = {a.action for a in acts}
-        if any(pair <= names for pair in _OPPOSITES):
+        if _contradictory(whitelist[uuid].type, acts):
             out.conflicts.append(uuid)
             for a in acts:
                 out.rejected.append(Rejection(uuid, a.action, "contradictory_actions"))
@@ -118,10 +122,19 @@ def validate_plan(plan: Plan, whitelist: dict[str, Device]) -> ValidationOutcome
             out.rejected.append(Rejection(a.uuid, a.action, "too_many_actions"))
         out.actions = out.actions[:MAX_ACTIONS_PER_REQUEST]
 
-    # Only keep "skipped" entries that reference real devices, so the model
-    # cannot inject arbitrary text about devices the user does not own.
+    # Only keep "skipped" entries that reference real devices. Reasons are fixed codes
+    # (models.SKIP_REASONS); the reply text for each code is written by the application.
     acted = {a.uuid for a in out.actions}
+    listed: set[str] = set()
     for s in plan.skipped:
-        if s.uuid in whitelist and s.uuid not in acted:
-            out.skipped.append(SkippedDevice(s.uuid, s.reason[:200]))
+        if s.uuid in whitelist and s.uuid not in acted and s.uuid not in listed:
+            listed.add(s.uuid)
+            out.skipped.append(SkippedDevice(s.uuid, skip_reason(s.reason)))
     return out
+
+
+def _digits_to_int(v: object) -> object:
+    """Models sometimes emit integers as strings ("30"); accept plain ASCII digit strings only."""
+    if isinstance(v, str) and v.strip().isascii() and v.strip().isdigit():
+        return int(v.strip())
+    return v
