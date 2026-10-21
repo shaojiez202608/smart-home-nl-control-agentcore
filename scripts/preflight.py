@@ -138,6 +138,7 @@ def main() -> int:
         problem(f"AgentCore not usable in {r} ({type(exc).__name__})")
 
     cfn = boto3.client("cloudformation", region_name=r)
+    exists = False
     try:
         cfn.describe_stacks(StackName="CDKToolkit")
         ok("CDK bootstrap stack present (not modified by this project)")
@@ -148,6 +149,7 @@ def main() -> int:
         if status.endswith("FAILED") or status == "ROLLBACK_COMPLETE":
             problem(f"stack exists in state {status}; delete it before deploying")
         else:
+            exists = True
             ok(f"stack exists ({status}); deploy will update it")
     except ClientError:
         ok("stack does not exist yet")
@@ -184,14 +186,10 @@ def main() -> int:
         (ok if used + need <= limit else problem)(f"{what}: {used} in use, quota {int(limit)}, need {need}")
 
     vpcs = sum(len(p["Vpcs"]) for p in ec2.get_paginator("describe_vpcs").paginate())
-    headroom("vpc", "L-F678F1CE", vpcs, 1, "VPCs")
-    headroom(
-        "ec2",
-        "L-0263D0A3",
-        len(ec2.describe_addresses()["Addresses"]),
-        int(cfg["natGateways"]),
-        "Elastic IPs",
-    )
+    # An update reuses the stack's own VPC and Elastic IPs.
+    headroom("vpc", "L-F678F1CE", vpcs, 0 if exists else 1, "VPCs")
+    eips = len(ec2.describe_addresses()["Addresses"])
+    headroom("ec2", "L-0263D0A3", eips, 0 if exists else int(cfg["natGateways"]), "Elastic IPs")
     info(
         "check Amazon Bedrock tokens-per-minute and AgentCore quotas in Service Quotas for your expected load"
     )
